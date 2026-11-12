@@ -1,0 +1,12 @@
+# archivos pesados
+*.png
+*.tif
+*.tiff
+*.jpeg
+*.jpg
+
+# entornos virtuales
+.venv/
+
+# workspace
+*.code-workspace
