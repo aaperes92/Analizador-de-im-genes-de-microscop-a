@@ -1,0 +1,16 @@
+[project]
+name = "analizador-de-im-genes-de-microscop-a"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "exifread>=3.5.1",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.4",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+]

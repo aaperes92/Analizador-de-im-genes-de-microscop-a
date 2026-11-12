@@ -14,6 +14,7 @@ numpy
 scipy
 matplotlib
 scikit-image
+exifread
 
 puedes instalar los paquetes necesarios ejecutando el siguiente comando en tu terminal o línea de comandos:
 
