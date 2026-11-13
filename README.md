@@ -34,12 +34,12 @@ pip install numpy scipy matplotlib scikit-image
 # Additional information
 
 ## Author
-[Mauricio Romano]
-[Daniel Romero]
-[Angel A. Perez]
+- [Mauricio Romano]
+- [Daniel Romero]
+- [Angel A. Perez]
 
 ## Contact
 Para consultas relacionadas con el conjunto de datos, puede comunicarse con los autores a través de los siguientes correos electrónicos:  
-[mauricio.romano@ib.edu.ar]
-[daniel.romero@ib.edu.ar]
-[angel.perez@ib.edu.ar]
+- [mauricio.romano@ib.edu.ar]
+- [daniel.romero@ib.edu.ar]
+- [angel.perez@ib.edu.ar]
