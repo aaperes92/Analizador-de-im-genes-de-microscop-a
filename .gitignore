@@ -4,6 +4,7 @@
 *.tiff
 *.jpeg
 *.jpg
+__pycache__/
 
 # entornos virtuales
 .venv/
