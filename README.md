@@ -43,3 +43,16 @@ Para consultas relacionadas con el conjunto de datos, puede comunicarse con los 
 - [mauricio.romano@ib.edu.ar]
 - [daniel.romero@ib.edu.ar]
 - [angel.perez@ib.edu.ar]
+
+## Módulo TEM
+Carga y preprocesamiento de imágenes TEM (`src/tem/`): lee `.tif`,
+`.tiff`, `.jpg`, `.png`, `.dm3` y `.mrc`, normaliza a [0, 1] por
+percentiles y reduce el ruido con un filtro gaussiano, de mediana,
+bilateral o de Wiener, elegido a mano o automáticamente.
+
+```python
+from tem import pipeline_tem
+resultado = pipeline_tem("imagen.dm3")  # method="auto" por defecto
+```
+
+Documentación completa: [docs/tem.md](docs/tem.md).
