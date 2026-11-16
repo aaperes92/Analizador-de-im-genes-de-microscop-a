@@ -31,6 +31,9 @@ DEFAULT_OUTPUT_DIR: Path = (
     Path(__file__).resolve().parents[2] / "data" / "samples"
 )
 
+# Percentiles (inferior, superior) que se llevan a 0 y 1 al normalizar
+NORM_PERCENTILES: tuple[float, float] = (0.1, 99.9)
+
 # Métodos de preprocesamiento disponibles
 PREPROCESS_METHODS: tuple[str, ...] = (
     "gaussian", "median", "bilateral", "wiener", "auto",
@@ -49,15 +52,20 @@ WIENER_WINDOW: int = 5
 AUTO_IMPULSE_FRACTION: float = 0.002
 # Dispersión robusta de los gradientes Sobel (MAD escalada). Los bordes
 # ocupan pocos píxeles y casi no la afectan: mide sobre todo el ruido.
-# Una imagen sin ruido da ~0 y ruido puro da ~0.1.
-AUTO_GRAD_LOW: float = 0.035  # por debajo: ruido bajo
-AUTO_GRAD_HIGH: float = 0.075  # por encima: ruido alto
+# Una imagen sin ruido da ~0 y ruido puro da ~0.13. En 13 imágenes
+# reales de campo claro HR dio entre 0.010 y 0.052.
+AUTO_GRAD_LOW: float = 0.04  # por debajo: ruido bajo
+AUTO_GRAD_HIGH: float = 0.09  # por encima: ruido alto
 # Factor que convierte la MAD en un desvío estándar (ruido gaussiano)
 _MAD_TO_STD: float = 1.4826
 
 
 def _normalize(image: np.ndarray) -> np.ndarray:
-    """Normaliza un array al rango [0, 1] por mínimo y máximo.
+    """Normaliza un array al rango [0, 1] usando percentiles.
+
+    Toma como 0 y 1 los percentiles NORM_PERCENTILES y recorta lo que
+    queda afuera. Así unos pocos píxeles extremos (píxeles calientes,
+    bordes de la rejilla) no comprimen el contraste del resto.
 
     Args:
         image: Array numérico de cualquier dtype.
@@ -67,12 +75,16 @@ def _normalize(image: np.ndarray) -> np.ndarray:
         constante, devuelve un array de ceros con el mismo shape.
     """
     data = image.astype(np.float64)
-    vmin = float(data.min())
-    vmax = float(data.max())
+    vmin, vmax = (float(v) for v in np.percentile(data, NORM_PERCENTILES))
+    # Si los percentiles coinciden (imagen casi constante), se usa el
+    # mínimo y el máximo
+    if vmax == vmin:
+        vmin, vmax = float(data.min()), float(data.max())
     # Imagen constante: se evita la división por cero
     if vmax == vmin:
         return np.zeros(image.shape, dtype=np.float32)
-    return ((data - vmin) / (vmax - vmin)).astype(np.float32)
+    scaled = (data - vmin) / (vmax - vmin)
+    return np.clip(scaled, 0.0, 1.0).astype(np.float32)
 
 
 def _read_raw(path: Path, ext: str) -> np.ndarray:

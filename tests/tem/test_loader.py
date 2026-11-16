@@ -100,7 +100,7 @@ def test_load_formatos_soportados(tmp_path: Path, ext: str) -> None:
 
     assert image.shape == _SAMPLE.shape
     _assert_normalized(image)
-    # Min-max: el rango completo [0, 1] queda ocupado
+    # Normalización por percentiles: el rango [0, 1] queda ocupado
     assert image.min() == pytest.approx(0.0)
     assert image.max() == pytest.approx(1.0)
 
@@ -172,6 +172,19 @@ def test_load_imagen_constante_da_ceros(tmp_path: Path) -> None:
 
     _assert_normalized(image)
     assert not image.any()
+
+
+def test_normalizacion_robusta_a_pixeles_extremos() -> None:
+    """Unos pocos píxeles extremos no comprimen el contraste."""
+    image = _particles()
+    # Un píxel caliente muy por encima del resto
+    image[0, 0] = 50.0
+
+    normalized = loader._normalize(image)
+
+    _assert_normalized(normalized)
+    # Sin percentiles casi todo quedaría por debajo de 0.02
+    assert np.percentile(normalized, 99) > 0.9
 
 
 def test_load_imprime_informacion(
