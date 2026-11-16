@@ -50,9 +50,15 @@ Carga y preprocesamiento de imágenes TEM (`src/tem/`): lee `.tif`,
 percentiles y reduce el ruido con un filtro gaussiano, de mediana,
 bilateral o de Wiener, elegido a mano o automáticamente.
 
+Además segmenta la imagen en fases de intensidad (sin asignar elementos
+químicos): detecta cuántas fases hay, elige el umbral (Otsu, GMM o
+triángulo para campo oscuro), separa partículas que se tocan y calcula
+área, intensidad y número de regiones de cada fase.
+
 ```python
-from tem import pipeline_tem
-resultado = pipeline_tem("imagen.dm3")  # method="auto" por defecto
+from tem import pipeline_tem, pipeline_segmentation
+pre = pipeline_tem("imagen.dm3", show=False)  # Etapa 1: preprocesamiento
+seg = pipeline_segmentation(pre)              # Etapa 2: segmentación
 ```
 
 Documentación completa: [docs/tem.md](docs/tem.md).
