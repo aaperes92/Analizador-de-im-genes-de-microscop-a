@@ -4,6 +4,8 @@
 *.tiff
 *.jpeg
 *.jpg
+*.dm3
+*.mrc
 
 # entornos virtuales
 .venv/
