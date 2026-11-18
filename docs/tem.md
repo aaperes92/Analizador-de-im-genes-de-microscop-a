@@ -4,7 +4,7 @@ Parte del proyecto **Analizador de Imágenes de Microscopía**.
 Autor del módulo: Daniel Romero (daniel.romero@ib.edu.ar).
 
 El módulo `tem` trabaja con imágenes de microscopía electrónica de
-transmisión (TEM) en dos etapas:
+transmisión (TEM) en tres etapas:
 
 1. **[Etapa 1 — Carga y preprocesamiento](#etapa-1--carga-y-preprocesamiento)**:
    lee la imagen, la normaliza a [0, 1] y reduce el ruido.
@@ -13,8 +13,20 @@ transmisión (TEM) en dos etapas:
    detecta cuántas fases de intensidad hay, las separa, limpia las
    regiones y calcula estadísticas por fase.
    Código: [`src/tem/segmentation.py`](../src/tem/segmentation.py).
+3. **[Etapa 3 — Análisis morfológico](#etapa-3--análisis-morfológico)**:
+   mide tamaño, forma y orientación de cada región segmentada.
+   Código: [`src/tem/morphology.py`](../src/tem/morphology.py).
 
-Tests: [`tests/tem/`](../tests/tem/) (71 tests, `uv run pytest`).
+Tests: [`tests/tem/`](../tests/tem/) (97 tests, `uv run pytest`).
+
+**Análisis completo en un paso**: [`scripts/analizar_tem.py`](../scripts/analizar_tem.py)
+corre las tres etapas sobre una imagen o una carpeta, muestra las
+figuras y guarda un resumen en CSV. Se configura editando la sección
+CONFIGURACIÓN del archivo o pasando la ruta:
+
+```bash
+uv run python scripts/analizar_tem.py "RUTA\imagen.dm3"
+```
 
 ---
 
@@ -465,3 +477,206 @@ uv run python scripts/segmentacion/bloque1_fases.py RUTA
 - **Unidades**: los tamaños están en píxeles; los `.dm3` traen el
   tamaño de píxel (por ejemplo 0.0024 µm en campo claro, 0.09 nm en
   campo oscuro) pero todavía no se usa.
+
+---
+
+# Etapa 3 — Análisis morfológico
+
+Mide **tamaño, forma y orientación** de cada región que dejó la
+segmentación. Todas las medidas están **en píxeles** y el módulo **no
+asume nada sobre qué material es cada fase**.
+
+## Uso rápido
+
+```python
+from tem import pipeline_tem, pipeline_segmentation, pipeline_morphology
+
+pre = pipeline_tem("imagen.dm3", show=False)          # Etapa 1
+seg = pipeline_segmentation(pre, show=False)           # Etapa 2
+mor = pipeline_morphology(seg)                         # Etapa 3
+
+mor["props"]["fase_0"][0]          # medidas de la primera región
+mor["size_stats"]["fase_0"]        # estadísticas de tamaño
+mor["shape_stats"]["fase_0"]["forma_predominante"]
+mor["orientation_stats"]["fase_0"]["indice_orden_S"]
+```
+
+Genera dos figuras en `data/samples/`: `<nombre>_orientacion.png`
+(rosa de orientaciones) y `<nombre>_morfologia.png`.
+
+Para elegir las fases: `pipeline_morphology(seg, phases=[1])`.
+
+## Qué regiones se analizan
+
+- **Fases**: todas menos la **mayoritaria** (fondo o matriz). Funciona
+  igual en campo claro (partículas oscuras) y en campo oscuro
+  (partículas brillantes). Con `phases` se eligen a mano.
+- **Regiones**: se separan con vecindad de 4 píxeles y se ignoran los
+  fragmentos de menos de 419 px (0.01 % de la imagen), con el mismo
+  criterio que las estadísticas de la Etapa 2.
+- **Regiones que tocan el borde**: tienen área y forma truncadas. Se
+  marcan con `toca_borde`, se dibujan (punteadas) pero **no entran**
+  en las estadísticas de tamaño, forma y orientación.
+
+## Bloque 1 — Propiedades por región (`extract_region_properties`)
+
+Por región, con `skimage.measure.regionprops`: `area_px`,
+`perimetro_px`, `eje_mayor_px`, `eje_menor_px`, `orientacion_deg`,
+`centroide` (y, x), `bbox`, `solidez`, `excentricidad` y `toca_borde`.
+
+**Convención de ángulos**: `orientacion_deg` va de 0° a 180°, con
+**0° = horizontal** y 90° = vertical, medido contra reloj tal como se
+ve la imagen. scikit-image usa otra convención (ángulo respecto del eje
+vertical, entre −90° y 90°): se convierte con
+`(grados + 90) mod 180`.
+
+## Bloque 2 — Tamaño y forma
+
+### `analyze_size_distribution`
+
+Media, mediana, desvío, mínimo, máximo, IQR y percentiles 10/25/75/90
+del área, y un **ajuste log-normal** (`scipy.stats.lognorm` con `loc`
+fijo en 0) evaluado con el test de Kolmogorov-Smirnov
+(`buen_ajuste` si p > 0.05). Con menos de 5 regiones no se ajusta.
+
+**Cómo leer `buen_ajuste`** (es orientativo):
+- El p-valor es optimista: los parámetros se ajustan con los mismos
+  datos que se testean.
+- Con cientos de regiones el test detecta cualquier diferencia chica.
+- **La distribución está cortada en 419 px**: la limpieza de la Etapa
+  2 elimina las regiones más chicas. Por eso falla el ajuste en
+  `prueba1.dm3` (293 partículas, p = 0.007): faltan las más chicas.
+
+### `analyze_shape`
+
+Circularidad (4π·área/perímetro²), excentricidad (media, percentiles y
+conteo en 5 rangos), solidez y relación de aspecto (eje mayor / eje
+menor). La forma predominante se decide con los valores medios y estas
+reglas, en orden:
+
+| Condición | Forma |
+|---|---|
+| circularidad > 0.85 | `circular` |
+| relación de aspecto > 2.0 | `elongada` |
+| solidez < 0.80 | `irregular` |
+| si no | `compacta` |
+
+`conteo_formas` aplica las mismas reglas a **cada región**: un
+promedio puede esconder una mezcla (en `prueba1`: 192 compactas, 46
+elongadas, 32 circulares y 23 irregulares).
+
+**La circularidad se recorta a 1**: el perímetro digital subestima el
+real y en regiones chicas la fórmula da más de 1. Un círculo perfecto
+da 1.16 con r = 5 px, 0.98 con r = 10 y 0.93 con r = 40.
+
+## Bloque 3 — Orientación
+
+### `analyze_orientation`
+
+- Se usan solo las regiones con **excentricidad ≥ 0.5**: las casi
+  circulares no tienen eje mayor definido.
+- Ángulo medio y desvío con **estadística circular de período 180°**
+  (`scipy.stats.circmean`/`circstd` entre 0 y π): 170° y 10° promedian
+  0°, no 90°.
+- **Índice de orden** S = √(⟨cos 2θ⟩² + ⟨sin 2θ⟩²): 0 al azar, 1 todas
+  alineadas. `orientado` si S > 0.5, si no `aleatorio`.
+- **Con menos de 10 regiones** la clasificación es `insuficiente`: al
+  azar, S vale en promedio ≈ 0.89/√n, así que con pocas regiones sale
+  alto por casualidad. Se informa como `S_esperado_aleatorio`:
+
+| Regiones | S esperado al azar |
+|---|---|
+| 3 | 0.51 |
+| 5 | 0.40 |
+| 10 | 0.28 |
+| 50 | 0.13 |
+
+### `plot_orientation_rose`
+
+Una rosa polar por fase con 18 sectores de 10°, duplicada en
+180°–360° por simetría, con el color de la fase y una línea punteada en
+el ángulo medio.
+
+## Bloque 4 — Figura (`show_morphology_results`)
+
+Paneles: elipses ajustadas sobre la imagen (color por fase, punteadas
+si tocan el borde); mapa de calor del área de cada región (escala
+logarítmica: las áreas van de 419 px a más de un millón); mapa de
+calor de la excentricidad; y por fase, el histograma de áreas con la
+log-normal (**roja** si el ajuste es bueno, **gris punteada** si no) y
+líneas de media (rojo) y mediana (verde).
+
+## Bloque 5 — Pipeline (`pipeline_morphology`)
+
+Encadena todo, imprime un resumen por fase y devuelve `original`,
+`processed`, `mask`, `props`, `size_stats`, `shape_stats`,
+`orientation_stats`, `filepath` y `n_phases`.
+
+## Resultados con las imágenes de prueba
+
+Las tres etapas tardan entre 12 y 22 s por imagen.
+
+| Imagen | Regiones | Área media (px) | Forma | S | Orientación |
+|---|---|---|---|---|---|
+| prueba1 | 293 | 1 496 | compacta | 0.10 | aleatorio |
+| prueba2 | 292 | 3 230 | compacta | 0.17 | aleatorio |
+| prueba9 | 205 | 2 591 | compacta | 0.17 | aleatorio |
+| prueba11 | 198 | 5 449 | compacta | 0.05 | aleatorio |
+| prueba14 | 15 | 1 307 | irregular | 0.71 | orientado* |
+| Image_0039 rot_330 (oscuro) | 35 | 4 250 | compacta | 0.16 | aleatorio |
+| Image_0039 rot_340 (oscuro) | 45 | 3 435 | irregular | 0.06 | aleatorio |
+| img_0032 (oscuro) | 23 | 7 716 | compacta | 0.66 | orientado* |
+| img_0033 (oscuro) | 45 | 5 735 | compacta | 0.21 | aleatorio |
+
+\* Ver limitaciones: la orientación detectada viene de la textura de la
+imagen, no de las partículas.
+
+Con pocas regiones (`prueba13`, `prueba7`, las `S041C`) no hay
+estadística útil: la orientación queda `insuficiente` o la fase sin
+regiones.
+
+## Scripts de prueba por bloque
+
+En [`scripts/morfologia/`](../scripts/morfologia/), con una imagen
+(abre figuras) o una carpeta (imprime una tabla):
+
+| Script | Qué muestra |
+|---|---|
+| `bloque1_propiedades.py` | Tabla de regiones; centroides y bounding boxes sobre la imagen |
+| `bloque2_tamano_forma.py` | Áreas con la log-normal, circularidad vs. aspecto, solidez, excentricidad |
+| `bloque3_orientacion.py` | Rosa de orientaciones; `--sintetico` compara elipses alineadas y al azar |
+| `bloque4_figura.py` | La figura morfológica completa |
+| `bloque5_pipeline.py` | Las tres etapas desde el archivo; acepta fases: `RUTA 1` o `RUTA 0,2` |
+
+## Constantes ajustables (`src/tem/morphology.py`)
+
+| Constante | Valor | Qué controla |
+|---|---|---|
+| `LOGNORM_MIN_REGIONS` | 5 | Mínimo de regiones para ajustar la log-normal |
+| `KS_PVALUE_OK` | 0.05 | p-valor para `buen_ajuste` |
+| `CIRCULAR_MIN_CIRCULARITY` | 0.85 | Circularidad para `circular` |
+| `ELONGATED_MIN_ASPECT` | 2.0 | Relación de aspecto para `elongada` |
+| `IRREGULAR_MAX_SOLIDITY` | 0.80 | Solidez para `irregular` |
+| `ORIENTATION_MIN_ECCENTRICITY` | 0.5 | Excentricidad mínima para la orientación |
+| `ORIENTED_MIN_S` | 0.5 | S para `orientado` |
+| `ORIENTATION_MIN_REGIONS` | 10 | Mínimo de regiones para clasificar la orientación |
+| `ROSE_BINS` | 18 | Sectores de la rosa (de 10°) |
+
+El tamaño mínimo de región es `CLEAN_MIN_FRACTION` de
+`segmentation.py`, compartido con la Etapa 2.
+
+## Limitaciones conocidas
+
+- **Fase mayoritaria**: si las partículas ocupan más de la mitad de la
+  imagen, la fase "excluida" son ellas. En `S041C_0025.dm3` se
+  analiza el vacío; hay que pasar `phases=[1]`.
+- **La orientación mide formas, no materiales**: en `prueba14.dm3` las
+  regiones chicas siguen las franjas de la red cristalina y en
+  `img_0032.dm3` un rayado diagonal del fondo; ambas dan `orientado`
+  aunque las partículas no estén alineadas.
+- **Partículas en el borde**: quedan fuera de las estadísticas. En
+  imágenes con pocas partículas grandes (`S041C`) casi no queda nada
+  para medir.
+- **Distribución truncada** en 419 px por la limpieza de la Etapa 2
+  (afecta la media, la mediana y el ajuste log-normal).
+- **Unidades**: todo en píxeles.

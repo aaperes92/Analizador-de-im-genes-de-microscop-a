@@ -22,6 +22,17 @@ from .segmentation import (
     show_segmentation_results,
 )
 
+# Etapa 3: análisis morfológico
+from .morphology import (
+    analyze_orientation,
+    analyze_shape,
+    analyze_size_distribution,
+    extract_region_properties,
+    pipeline_morphology,
+    plot_orientation_rose,
+    show_morphology_results,
+)
+
 __all__ = [
     # Etapa 1
     "load_tem_image",
@@ -39,4 +50,12 @@ __all__ = [
     "compute_phase_stats",
     "show_segmentation_results",
     "pipeline_segmentation",
+    # Etapa 3
+    "extract_region_properties",
+    "analyze_size_distribution",
+    "analyze_shape",
+    "analyze_orientation",
+    "plot_orientation_rose",
+    "show_morphology_results",
+    "pipeline_morphology",
 ]

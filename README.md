@@ -53,12 +53,17 @@ bilateral o de Wiener, elegido a mano o automáticamente.
 Además segmenta la imagen en fases de intensidad (sin asignar elementos
 químicos): detecta cuántas fases hay, elige el umbral (Otsu, GMM o
 triángulo para campo oscuro), separa partículas que se tocan y calcula
-área, intensidad y número de regiones de cada fase.
+área, intensidad y número de regiones de cada fase. Por último mide la
+morfología de cada región (tamaño, forma y orientación, en píxeles).
 
 ```python
-from tem import pipeline_tem, pipeline_segmentation
-pre = pipeline_tem("imagen.dm3", show=False)  # Etapa 1: preprocesamiento
-seg = pipeline_segmentation(pre)              # Etapa 2: segmentación
+from tem import pipeline_tem, pipeline_segmentation, pipeline_morphology
+pre = pipeline_tem("imagen.dm3", show=False)        # Etapa 1: preprocesamiento
+seg = pipeline_segmentation(pre, show=False)        # Etapa 2: segmentación
+mor = pipeline_morphology(seg)                      # Etapa 3: morfología
 ```
+
+Para correr las tres etapas sobre una imagen o una carpeta:
+`uv run python scripts/analizar_tem.py "RUTA"`.
 
 Documentación completa: [docs/tem.md](docs/tem.md).
