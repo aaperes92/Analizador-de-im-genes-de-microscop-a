@@ -1,7 +1,8 @@
-"""Análisis TEM completo: preprocesamiento, segmentación y morfología.
+"""Análisis TEM completo: preprocesamiento, segmentación, morfología y
+análisis de fases.
 
-Corre las tres etapas del módulo TEM sobre una imagen o sobre todas las
-imágenes de una carpeta.
+Corre las cuatro etapas del módulo TEM sobre una imagen o sobre todas
+las imágenes de una carpeta.
 
 Cómo usarlo (desde la raíz del proyecto):
 
@@ -53,6 +54,12 @@ UMBRAL = "auto"
 #   Ejemplos: [0] o [1, 2]
 FASES = None
 
+# Etapas 3 y 4 — etiqueta de la máscara que es el fondo: None = la fase
+#   mayoritaria. Si se indica, la Etapa 3 mide todas las demás (FASES
+#   se ignora). Ejemplo: 0 en S041C_0025.dm3, donde las partículas
+#   ocupan más de la mitad de la imagen.
+FONDO = None
+
 # Mostrar las figuras en pantalla (solo con una imagen)
 MOSTRAR_FIGURAS = True
 
@@ -72,19 +79,21 @@ from tem import (  # noqa: E402
     pipeline_segmentation,
     pipeline_tem,
 )
+from tem.fraction import phase_names, phase_title  # noqa: E402
 from tem.loader import DEFAULT_OUTPUT_DIR, SUPPORTED_FORMATS  # noqa: E402
+from tem.phase_analysis import pipeline_phase_analysis  # noqa: E402
 
 
 def analizar(path: Path, mostrar: bool) -> dict:
-    """Corre las tres etapas sobre una imagen.
+    """Corre las cuatro etapas sobre una imagen.
 
     Args:
         path: Ruta a la imagen.
         mostrar: Si es True, muestra las figuras y todos los mensajes.
 
     Returns:
-        Diccionario con los resultados de cada etapa ('etapa1',
-        'etapa2', 'etapa3') y el tiempo total en segundos ('segundos').
+        Diccionario con los resultados de cada etapa ('etapa1' a
+        'etapa4') y el tiempo total en segundos ('segundos').
     """
     inicio = time.perf_counter()
     salida = sys.stdout if mostrar else io.StringIO()
@@ -105,11 +114,22 @@ def analizar(path: Path, mostrar: bool) -> dict:
         print("\n" + "=" * 70)
         print("ETAPA 3 — Análisis morfológico")
         print("=" * 70)
-        etapa3 = pipeline_morphology(etapa2, phases=FASES,
+        fases = FASES
+        if FONDO is not None:
+            # Todas las fases menos el fondo indicado
+            fases = list(phase_names(etapa2["mask"], FONDO)[1].values())
+        etapa3 = pipeline_morphology(etapa2, phases=fases,
                                      output_dir=CARPETA_SALIDA,
                                      show=mostrar)
+
+        print("\n" + "=" * 70)
+        print("ETAPA 4 — Análisis de fases")
+        print("=" * 70)
+        etapa4 = pipeline_phase_analysis(etapa3, background=FONDO,
+                                         output_dir=CARPETA_SALIDA,
+                                         show=mostrar)
     return {"etapa1": etapa1, "etapa2": etapa2, "etapa3": etapa3,
-            "segundos": time.perf_counter() - inicio}
+            "etapa4": etapa4, "segundos": time.perf_counter() - inicio}
 
 
 def filas_resumen(path: Path, r: dict) -> list[dict]:
@@ -120,20 +140,33 @@ def filas_resumen(path: Path, r: dict) -> list[dict]:
         r: Resultado de analizar().
 
     Returns:
-        Lista de diccionarios (una fila por fase de la Etapa 3).
+        Lista de diccionarios (una fila por fase de la Etapa 3). La
+        columna 'fase' usa el nombre de la Etapa 4 (Fase 1, Fase 2...)
+        y 'etiqueta' la etiqueta de la máscara.
     """
-    e2, e3 = r["etapa2"], r["etapa3"]
+    e2, e3, e4 = r["etapa2"], r["etapa3"], r["etapa4"]
+    # Etiqueta de la máscara → nombre de la Etapa 4
+    nombres = {v["etiqueta_mascara"]: k
+               for k, v in e4["area_fractions"].items()
+               if k.startswith("fase_")}
     filas = []
     for fase, size in e3["size_stats"].items():
+        etiqueta = int(fase.split("_")[1])
+        f4 = nombres.get(etiqueta)
         orient = e3["orientation_stats"][fase]
         ajuste = size["ajuste_lognormal"]
-        filas.append({
+        fila = {
             "archivo": path.name,
             "filtro": r["etapa1"]["method_used"],
             "n_fases": e2["n_phases"],
             "umbral": e2["threshold_method"],
-            "fase": fase,
-            "area_fase_pct": round(e2["stats"][fase]["area_pct"], 2),
+            "fase": phase_title(f4) if f4 else fase,
+            "etiqueta": etiqueta,
+            # % sobre la imagen completa (con fondo e interfaces)
+            "area_pct_total": round(
+                e4["area_fractions"][f4]["area_pct_con_fondo"] if f4
+                else 100 * e2["stats"][fase]["area_px"]
+                / e2["mask"].size, 2),
             "n_regiones": size["n_regiones"],
             "area_media_px": _redondear(size["area_media_px"]),
             "area_mediana_px": _redondear(size["area_mediana_px"]),
@@ -142,8 +175,31 @@ def filas_resumen(path: Path, r: dict) -> list[dict]:
             "forma": e3["shape_stats"][fase]["forma_predominante"] or "",
             "indice_S": _redondear(orient["indice_orden_S"], 2),
             "orientacion": orient["clasificacion"] or "",
-            "segundos": round(r["segundos"], 1),
-        })
+        }
+        if f4:
+            dens = e4["number_density"][f4]
+            hop = e4["clustering"][f4]
+            inh = e4["inhomogeneities"][f4]
+            fila.update({
+                "vol_pct_est_total": round(
+                    e4["volume_fractions"][f4]["vol_frac_pct_con_fondo"], 2),
+                "densidad_1000px2": _redondear(
+                    dens["densidad_por_1000px2"], 4),
+                "clark_evans_R": _redondear(dens["indice_clark_evans"], 2),
+                "rdf": e4["rdf"][f4]["clasificacion"],
+                "distribucion_densidad": e4["density_map"][f4][
+                    "clasificacion"],
+                "hopkins_H": _redondear(hop["hopkins_statistic"], 2),
+                "hopkins": hop["hopkins_clasificacion"],
+                "grupos_dbscan": (hop["n_clusters_dbscan"]
+                                  if hop["n_clusters_dbscan"] is not None
+                                  else ""),
+                "inhomogeneidades": inh["n_alta"] + inh["n_baja"],
+                "gradientes_significativos": len(e4["spatial_gradients"][
+                    f4]["gradientes_significativos"]),
+            })
+        fila["segundos"] = round(r["segundos"], 1)
+        filas.append(fila)
     return filas
 
 
@@ -163,12 +219,14 @@ def imprimir_tabla(filas: list[dict]) -> None:
         filas: Filas de filas_resumen().
     """
     print(f"\n{'archivo':36} {'umbral':>8} {'fase':7} {'área%':>6} "
-          f"{'n':>4} {'media px':>9} {'forma':>10} {'S':>5}  orientación")
+          f"{'n':>4} {'media px':>9} {'forma':>10} {'S':>5} "
+          f"{'orientación':>12} {'RDF':>12} {'Hopkins':>12}")
     for f in filas:
         print(f"{f['archivo']:36} {f['umbral']:>8} {f['fase']:7} "
-              f"{f['area_fase_pct']:>6} {f['n_regiones']:>4} "
+              f"{f['area_pct_total']:>6} {f['n_regiones']:>4} "
               f"{str(f['area_media_px']):>9} {f['forma']:>10} "
-              f"{str(f['indice_S']):>5}  {f['orientacion']}")
+              f"{str(f['indice_S']):>5} {f['orientacion']:>12} "
+              f"{f.get('rdf', '-'):>12} {f.get('hopkins', '-'):>12}")
 
 
 def guardar_csv(filas: list[dict], nombre: str) -> Path:

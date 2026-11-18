@@ -1072,8 +1072,10 @@ def pipeline_segmentation(
     Returns:
         Diccionario con 'original', 'processed', 'mask', 'n_phases'
         (fases en la máscara final), 'threshold_method' (el método
-        aplicado, nunca 'auto'), 'stats', 'filepath' y 'thresholds'
-        (umbrales usados; None con 'adaptive').
+        aplicado, nunca 'auto'), 'stats', 'filepath', 'thresholds'
+        (umbrales usados; None con 'adaptive') y 'lineas_watershed'
+        (máscara booleana de las líneas de corte del watershed: en
+        'mask' tienen -1 igual que las interfaces y no se distinguen).
 
     Raises:
         ValueError: Si falta alguna clave en preprocessed_dict o el
@@ -1136,6 +1138,9 @@ def pipeline_segmentation(
     mask = apply_segmentation(processed, segmentation_input)
     mask = clean_mask(mask)
     mask = separate_touching_regions(mask)
+    # Las líneas de corte se guardan aparte: después de marcar las
+    # interfaces, ambas son -1 y ya no se pueden separar
+    watershed_lines = mask == INTERFACE_LABEL
     mask = detect_interfaces(mask)
 
     print("--- 4. Estadísticas ---")
@@ -1171,4 +1176,5 @@ def pipeline_segmentation(
         "stats": stats,
         "filepath": filepath,
         "thresholds": thresholds,
+        "lineas_watershed": watershed_lines,
     }

@@ -33,6 +33,33 @@ from .morphology import (
     show_morphology_results,
 )
 
+# Etapa 4: análisis de fases (fracción, composicional y espacial)
+from .fraction import (
+    compute_area_fractions,
+    compute_interface_fraction,
+    compute_number_density,
+    estimate_volume_fractions,
+    pipeline_fraction,
+    show_fraction_results,
+)
+from .compositional import (
+    build_phase_intensity_map,
+    compute_intensity_gradients,
+    compute_intensity_profiles,
+    detect_inhomogeneities,
+    pipeline_compositional,
+    show_compositional_results,
+)
+from .spatial import (
+    compute_density_map,
+    compute_rdf,
+    detect_clustering,
+    detect_spatial_gradients,
+    pipeline_spatial,
+    show_spatial_results,
+)
+from .phase_analysis import pipeline_phase_analysis
+
 __all__ = [
     # Etapa 1
     "load_tem_image",
@@ -58,4 +85,27 @@ __all__ = [
     "plot_orientation_rose",
     "show_morphology_results",
     "pipeline_morphology",
+    # Etapa 4 — Módulo A: fracción
+    "compute_area_fractions",
+    "estimate_volume_fractions",
+    "compute_number_density",
+    "compute_interface_fraction",
+    "show_fraction_results",
+    "pipeline_fraction",
+    # Etapa 4 — Módulo B: composicional
+    "compute_intensity_profiles",
+    "compute_intensity_gradients",
+    "build_phase_intensity_map",
+    "detect_inhomogeneities",
+    "show_compositional_results",
+    "pipeline_compositional",
+    # Etapa 4 — Módulo C: espacial
+    "compute_rdf",
+    "compute_density_map",
+    "detect_clustering",
+    "detect_spatial_gradients",
+    "show_spatial_results",
+    "pipeline_spatial",
+    # Etapa 4 — pipeline maestro
+    "pipeline_phase_analysis",
 ]

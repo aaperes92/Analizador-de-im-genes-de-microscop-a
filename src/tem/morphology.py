@@ -820,7 +820,8 @@ def pipeline_morphology(
     Returns:
         Diccionario con 'original', 'processed', 'mask', 'props',
         'size_stats', 'shape_stats', 'orientation_stats', 'filepath' y
-        'n_phases'.
+        'n_phases'. Si la entrada trae 'lineas_watershed' (Etapa 2), se
+        pasa tal cual: la usa la Etapa 4.
 
     Raises:
         ValueError: Si falta alguna clave en segmentation_dict.
@@ -869,7 +870,7 @@ def pipeline_morphology(
             f"'{form['forma_predominante']}' | {s_txt}"
         )
 
-    return {
+    result = {
         "original": original,
         "processed": processed,
         "mask": mask,
@@ -880,3 +881,6 @@ def pipeline_morphology(
         "filepath": filepath,
         "n_phases": segmentation_dict["n_phases"],
     }
+    if "lineas_watershed" in segmentation_dict:
+        result["lineas_watershed"] = segmentation_dict["lineas_watershed"]
+    return result

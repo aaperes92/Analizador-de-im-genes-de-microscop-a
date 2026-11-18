@@ -4,7 +4,7 @@ Parte del proyecto **Analizador de Imágenes de Microscopía**.
 Autor del módulo: Daniel Romero (daniel.romero@ib.edu.ar).
 
 El módulo `tem` trabaja con imágenes de microscopía electrónica de
-transmisión (TEM) en tres etapas:
+transmisión (TEM) en cuatro etapas:
 
 1. **[Etapa 1 — Carga y preprocesamiento](#etapa-1--carga-y-preprocesamiento)**:
    lee la imagen, la normaliza a [0, 1] y reduce el ruido.
@@ -16,13 +16,21 @@ transmisión (TEM) en tres etapas:
 3. **[Etapa 3 — Análisis morfológico](#etapa-3--análisis-morfológico)**:
    mide tamaño, forma y orientación de cada región segmentada.
    Código: [`src/tem/morphology.py`](../src/tem/morphology.py).
+4. **[Etapa 4 — Análisis de fases](#etapa-4--análisis-de-fases)**:
+   fracciones de área y volumen, densidad, interfaces, intensidad
+   relativa por fase y distribución espacial de las partículas.
+   Código: [`src/tem/fraction.py`](../src/tem/fraction.py),
+   [`compositional.py`](../src/tem/compositional.py),
+   [`spatial.py`](../src/tem/spatial.py) y
+   [`phase_analysis.py`](../src/tem/phase_analysis.py).
 
-Tests: [`tests/tem/`](../tests/tem/) (97 tests, `uv run pytest`).
+Tests: [`tests/tem/`](../tests/tem/) (153 tests, `uv run pytest`).
 
 **Análisis completo en un paso**: [`scripts/analizar_tem.py`](../scripts/analizar_tem.py)
-corre las tres etapas sobre una imagen o una carpeta, muestra las
-figuras y guarda un resumen en CSV. Se configura editando la sección
-CONFIGURACIÓN del archivo o pasando la ruta:
+corre las cuatro etapas sobre una imagen o una carpeta, muestra las
+8 figuras y guarda un resumen en CSV con las métricas de todas las
+etapas. Se configura editando la sección CONFIGURACIÓN del archivo
+(ruta, filtro, umbral, fases y `FONDO`) o pasando la ruta:
 
 ```bash
 uv run python scripts/analizar_tem.py "RUTA\imagen.dm3"
@@ -393,8 +401,11 @@ número de fases.
 ### Bloque 6 — Pipeline (`pipeline_segmentation`)
 
 Encadena todo y devuelve `original`, `processed`, `mask`, `n_phases`,
-`threshold_method`, `stats`, `filepath` y `thresholds` (umbrales
-usados; `None` con `adaptive`). Valida el método y las claves del
+`threshold_method`, `stats`, `filepath`, `thresholds` (umbrales
+usados; `None` con `adaptive`) y `lineas_watershed` (máscara booleana
+de las líneas de corte del watershed: en `mask` tienen `-1` igual que
+las interfaces y no se pueden separar; la Etapa 4 las usa para medir
+los contactos entre partículas). Valida el método y las claves del
 diccionario de entrada antes de procesar.
 
 ## Resultados con las imágenes de prueba
@@ -679,4 +690,254 @@ El tamaño mínimo de región es `CLEAN_MIN_FRACTION` de
   para medir.
 - **Distribución truncada** en 419 px por la limpieza de la Etapa 2
   (afecta la media, la mediana y el ajuste log-normal).
+- **Unidades**: todo en píxeles.
+
+---
+
+# Etapa 4 — Análisis de fases
+
+Tres módulos que se encadenan: **fracción** (cuánto hay de cada fase),
+**composicional relativo** (cómo es su intensidad) y **espacial** (cómo
+se distribuyen sus partículas). Todo en píxeles.
+
+## Uso rápido
+
+```python
+from tem import (pipeline_tem, pipeline_segmentation,
+                 pipeline_morphology, pipeline_phase_analysis)
+
+pre = pipeline_tem("imagen.dm3", show=False)          # Etapa 1
+seg = pipeline_segmentation(pre, show=False)           # Etapa 2
+mor = pipeline_morphology(seg, show=False)             # Etapa 3
+res = pipeline_phase_analysis(mor)                     # Etapa 4
+
+res["area_fractions"]["fase_1"]      # fracciones de la Fase 1
+res["clustering"]["fase_1"]          # Hopkins y DBSCAN
+res["inhomogeneities"]["fondo"]      # zonas anómalas del fondo
+```
+
+Imprime un reporte final (fracciones, distribución espacial,
+inhomogeneidades y gradientes) y guarda tres figuras en
+`data/samples/`: `<nombre>_fracciones.png`, `_composicional.png` y
+`_espacial.png`. Cada módulo también se puede correr solo:
+`pipeline_fraction` → `pipeline_compositional` → `pipeline_spatial`;
+cada uno devuelve lo que recibe más sus resultados.
+
+Si las partículas ocupan más de la mitad de la imagen, hay que indicar
+el fondo: `pipeline_phase_analysis(mor, background=0)` (y en la Etapa 3,
+las fases que no son fondo). En `analizar_tem.py`: `FONDO = 0`.
+
+## Los nombres de las fases
+
+- **Fondo**: la fase mayoritaria (o la indicada con `background`).
+- **Fase 1, Fase 2, …**: las demás, de la más oscura a la más clara.
+  Cada una guarda su `etiqueta_mascara` para cruzarla con las Etapas 2
+  y 3 (que nombran las fases por etiqueta: en `prueba1.dm3` la
+  `fase_0` de la Etapa 3 es la `fase_1` de la Etapa 4).
+- **Nunca se asignan elementos químicos.**
+
+## Módulo A — Fracción de fases (`fraction.py`)
+
+### A1 — Fracciones de área y volumen
+
+- `area_pct`: sobre el área sin fondo ni interfaces (las fases suman
+  100 %). `area_pct_con_fondo`: sobre toda la imagen. Si las sumas no
+  dan 100 % (tolerancia 0.01 %) se lanza `ValueError`.
+- **Volumen (principio de Delesse)**: fracción de volumen ≈ fracción
+  de área. Hay dos lecturas: `vol_frac_estimada` (dentro del material,
+  como pide la especificación) y `vol_frac_estimada_con_fondo` (sobre
+  toda la imagen). **Con una sola fase fuera del fondo** —20 de las 22
+  imágenes de prueba— la primera vale siempre 100 % y la útil es la
+  segunda (en `prueba1`, las partículas cubren el 11.6 %).
+- **Advertencia**: Delesse supone un **corte** plano de una
+  microestructura isótropa. Una imagen TEM es una **proyección** de todo
+  el espesor: las partículas se superponen y la fracción de área tiende
+  a sobreestimar la de volumen.
+
+### A2 — Densidad numérica
+
+Cantidad de partículas por área (también cada 1000 px²) y
+**separación al vecino más cercano** (no el promedio de todas las
+distancias entre pares, que depende sobre todo del tamaño de la imagen).
+El **índice de Clark-Evans** R compara esa separación con la esperada
+al azar (0.5/√densidad): ≈ 1 al azar, < 1 agrupadas, > 1 espaciadas.
+Una grilla da R = 2.0; puntos al azar dan ~1.1 porque no se corrige el
+efecto del borde.
+
+### A3 — Interfaces
+
+Los pares de fases adyacentes se detectan dilatando cada fase 2 px para
+cruzar la banda de interfaz. La longitud de un par es su cantidad de
+píxeles / 2 (la banda tiene 2 px); contar píxeles sobreestima los
+bordes diagonales hasta ~40 %. Los **contactos entre partículas** de una
+misma fase son las líneas del watershed: se miden con
+`lineas_watershed` de la Etapa 2 (sin ellas, quedan en `None`; antes de
+guardarlas aparte, deducirlas de la máscara daba 10 733 px en
+`prueba6` cuando eran 133).
+
+## Módulo B — Composicional relativo (`compositional.py`)
+
+> **La intensidad TEM no es composición.** Depende del espesor, de la
+> difracción y del enfoque. Este módulo compara intensidades relativas
+> entre fases **dentro de una misma imagen** (normalizada en la Etapa
+> 1): no sirve para comparar imágenes ni para identificar materiales.
+
+### B1 — Perfiles de intensidad
+
+- Por fase (incluido el fondo, así siempre hay al menos un par):
+  histograma de 100 bins, media, mediana, moda, desvío, asimetría,
+  curtosis (en exceso) e IQR.
+- **Contraste** |mA − mB| / (mA + mB): alto (> 0.3), medio, bajo
+  (< 0.1).
+- **Perfil de interfaz**: la intensidad promediada según la distancia
+  con signo al borde entre dos fases (−20 a +20 px), es decir, el perfil
+  perpendicular promediado a lo largo de toda la interfaz. Se corrige el
+  corrimiento de 1.5 px que introduce la banda de interfaz. Se miden el
+  **ancho de transición** (10 %–90 % del cambio; coincide con 2.56·σ
+  dentro de ~1 px en bordes sintéticos), la pendiente máxima del perfil
+  y el percentil 95 del gradiente de Sobel.
+- **`meseta_alcanzada`**: si el perfil sigue cambiando en algún extremo,
+  el ancho está limitado por la ventana y se informa como
+  **"≥ X px (sin meseta)"**. En las imágenes reales pasa casi siempre:
+  los bordes de las partículas son graduales (se afinan hacia el borde)
+  y solo 4 pares de campo claro dieron un ancho confiable (9–17 px).
+
+### B2 — Mapas e inhomogeneidades
+
+- Mapas de intensidad y de **z-score** por fase (respecto de su propia
+  media y desvío) y un mapa global.
+- **Inhomogeneidades**: con millones de píxeles, el ruido solo ya
+  supera |z| > 2.5 en ~1 % de ellos. Por eso se suaviza dentro de cada
+  fase (σ = 2 px) y solo cuentan las zonas conectadas de ≥ 419 px. Con
+  ruido puro da 0 zonas.
+- En la práctica encuentra zonas que se apartan de su fase, no
+  necesariamente defectos: el **halo claro de Fresnel** alrededor de las
+  partículas (`prueba13`), **huecos de vacío** dentro de un fondo que
+  mezcla vacío y película de soporte (`prueba1`), núcleos más gruesos.
+
+## Módulo C — Espacial (`spatial.py`)
+
+Cuatro medidas complementarias. Con menos de 10 partículas, todas dan
+**'insuficiente'**.
+
+| Medida | Qué responde | Referencia al azar |
+|---|---|---|
+| **RDF g(r)** | ¿Hay más vecinas a distancia r que al azar? | 40 repeticiones al azar en la misma ventana (corrige el borde) |
+| **Mapa de densidad** | ¿Hay zonas con más partículas? | CV de 200 distribuciones al azar |
+| **Hopkins + DBSCAN** | ¿Están agrupadas? ¿Dónde están los grupos? | Hopkins: H ≈ 0.5 al azar |
+| **Gradientes** | ¿Cambia algo de un lado al otro de la imagen? | Regresión con corrección de Bonferroni |
+
+### C1 — RDF
+
+g(r) hasta 1/4 del lado de la imagen. Como las partículas tienen tamaño,
+g ≈ 0 por debajo de su diámetro aunque estén agrupadas: se clasifica con
+el promedio de g **entre 1 y 3 diámetros típicos**, comparado con la
+franja (percentiles 2.5–97.5) que dan las repeticiones al azar. Una
+grilla de paso a da picos en a, a·√2, 2a…
+
+### C2 — Mapa de densidad
+
+Grilla automática (~5 partículas por celda; con 32×32 fijo y 300
+partículas, cada celda tendría 0.3 y el CV saldría alto aunque estén al
+azar). El CV se clasifica con los límites de la especificación (0.3 y
+0.7) solo si supera el percentil 97.5 del CV al azar; si no, la
+clasificación es **'uniforme (compatible con azar)'**.
+
+### C3 — Hopkins y DBSCAN
+
+Dos cambios respecto de la especificación, comprobados con patrones
+sintéticos:
+
+- **Hopkins con distancias al cuadrado** (H = Σu² / (Σu² + Σw²),
+  variante de Lawson y Jurs para 2D). Con distancias simples una grilla
+  daba H = 0.28 ('aleatorio'); ahora 0.14 ('regular'). Se promedian 20
+  muestras.
+- **min_samples de DBSCAN según el azar**: percentil 99 de las vecinas
+  esperadas al azar dentro de eps (Poisson), más 1. Con n // 20 no se
+  encontraban grupos en `prueba1` (300 partículas → min 15) y sí en
+  puntos al azar. eps = 2 × distancia media al vecino más cercano.
+
+### C4 — Gradientes espaciales
+
+10 franjas en cada dirección; en cada una, partículas, área media (sin
+las del borde) e intensidad media de la fase. Recta con
+`scipy.stats.linregress`. Son 6 tests por fase: un gradiente es
+**significativo solo si p < 0.05/6** (Bonferroni); sin la corrección,
+~1 de cada 4 fases mostraría uno por casualidad (en `prueba1`, la
+densidad horizontal da p = 0.029 y no pasa). **Un gradiente de
+intensidad puede ser de espesor o de iluminación**, no de la fase
+(`prueba7`).
+
+## Resultados con las imágenes de prueba
+
+| Imagen | Cobertura | Clark-Evans R | RDF | Densidad | Hopkins H | DBSCAN |
+|---|---|---|---|---|---|---|
+| prueba1 | 11.6 % | 0.79 | clustering | mod. heterogénea | 0.89 clustering | 10 grupos |
+| prueba2 | 24.0 % | 1.02 | clustering | mod. heterogénea | 0.78 clustering | 6 grupos |
+| prueba4 | 15.7 % | 0.96 | clustering | mod. heterogénea | 0.74 aleatorio | 3 grupos |
+| img_0033 (oscuro) | 6.4 % | 0.53 | clustering | mod. heterogénea | 0.95 clustering | 3 grupos |
+| prueba7 (3 fases) | 23.6 / 25.5 / 14.2 % | — | insuficiente | insuficiente | insuficiente | — |
+
+En `prueba1` coinciden las cuatro medidas. `prueba4` es un caso de
+frontera: la RDF lo ve agrupado y Hopkins (0.74) queda justo debajo de 0.75.
+
+## Scripts de prueba por bloque
+
+En [`scripts/fases/`](../scripts/fases/), con una imagen (abre figuras),
+una carpeta (imprime una tabla) y, en los del Módulo C,
+`--sintetico` (patrones conocidos: grilla, al azar, grupos):
+
+| Script | Qué muestra |
+|---|---|
+| `a1_fracciones.py` | Fracciones de área y volumen (acepta `FONDO`) |
+| `a2_densidad.py` | Centroides unidos a su vecino más cercano, Clark-Evans |
+| `a3_interfaces.py` | Interfaces coloreadas por par y contactos entre partículas |
+| `a4_pipeline.py` | Figura de fracciones (Módulo A completo) |
+| `b1_perfiles.py` | Histogramas por fase y perfiles de interfaz |
+| `b2_inhomogeneidades.py` | Mapa de z-score y zonas anómalas |
+| `b3_pipeline.py` | Figura composicional (Módulo B completo) |
+| `c1_rdf.py` | g(r) con la franja del azar |
+| `c2_densidad.py` | Mapa de densidad sobre la imagen |
+| `c3_clustering.py` | Grupos de DBSCAN y Hopkins |
+| `c4_gradientes.py` | Valores por franja y rectas |
+| `c5_pipeline.py` | Figura espacial (Módulo C completo) |
+
+## Constantes ajustables
+
+| Constante | Valor | Qué controla |
+|---|---|---|
+| `fraction.SUM_TOLERANCE_PCT` | 0.01 | Tolerancia de la suma de fracciones (%) |
+| `fraction.INTERFACE_REACH` | 2 | Dilatación para cruzar la banda de interfaz (px) |
+| `compositional.CONTRAST_HIGH` / `_LOW` | 0.3 / 0.1 | Límites del contraste |
+| `compositional.INTERFACE_HALF_WIDTH` | 20 | Ventana del perfil de interfaz (px a cada lado) |
+| `compositional.PLATEAU_MAX_SLOPE_RATIO` | 0.1 | Pendiente máxima en los extremos para "meseta" |
+| `compositional.INHOMOGENEITY_SIGMA` | 2.0 | Suavizado antes de buscar inhomogeneidades (px) |
+| `compositional.INHOMOGENEITY_Z` | 2.5 | Umbral de z-score |
+| `spatial.MIN_PARTICLES` | 10 | Mínimo de partículas para clasificar |
+| `spatial.RDF_SHORT_RANGE` | (1, 3) | Rango de la RDF para clasificar (diámetros) |
+| `spatial.DENSITY_PER_CELL` | 5 | Partículas por celda con `grid_size='auto'` |
+| `spatial.CV_UNIFORM` / `CV_HETEROGENEOUS` | 0.3 / 0.7 | Límites del CV |
+| `spatial.HOPKINS_POWER` | 2 | Potencia de las distancias en H |
+| `spatial.HOPKINS_CLUSTERED` / `_REGULAR` | 0.75 / 0.25 | Límites de H |
+| `spatial.DBSCAN_EPS_FACTOR` | 2.0 | eps = factor × vecino más cercano medio |
+| `spatial.DBSCAN_RANDOM_PERCENTILE` | 0.99 | Percentil de Poisson para min_samples |
+| `spatial.GRADIENT_STRIPS` | 10 | Franjas por dirección |
+| `spatial.GRADIENT_ALPHA` / `_N_TESTS` | 0.05 / 6 | Bonferroni: p < 0.05/6 |
+
+## Limitaciones conocidas
+
+- **Partículas partidas** (anillos en campo oscuro, cortes del
+  watershed): varias regiones muy juntas se ven como un grupo e inflan
+  la RDF y Hopkins. En campo oscuro conviene mirar el pico de g(r) a
+  distancias menores que el tamaño de partícula.
+- **Fase mayoritaria = partículas**: si cubren más de la mitad de la
+  imagen hay que indicar el fondo (`background` / `FONDO`).
+- **Intensidad ≠ composición**: los gradientes y las inhomogeneidades de
+  intensidad pueden ser de espesor, iluminación u ópticos (Fresnel).
+- **Casos de frontera**: métodos distintos pueden no coincidir cerca
+  de sus límites (`prueba4`).
+- **Bordes de la imagen**: Clark-Evans y Hopkins no corrigen el borde
+  (lo sobreestiman un poco); la RDF y el mapa de densidad sí.
+- **Pocas partículas**: con menos de 10, la distribución espacial no se
+  clasifica.
 - **Unidades**: todo en píxeles.

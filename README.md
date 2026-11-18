@@ -55,15 +55,20 @@ químicos): detecta cuántas fases hay, elige el umbral (Otsu, GMM o
 triángulo para campo oscuro), separa partículas que se tocan y calcula
 área, intensidad y número de regiones de cada fase. Por último mide la
 morfología de cada región (tamaño, forma y orientación, en píxeles).
+Finalmente analiza las fases: fracciones de área y volumen, intensidad
+relativa e inhomogeneidades, y distribución espacial (RDF, Hopkins,
+DBSCAN, gradientes). Las fases se llaman Fase 1, Fase 2… y el fondo.
 
 ```python
-from tem import pipeline_tem, pipeline_segmentation, pipeline_morphology
+from tem import (pipeline_tem, pipeline_segmentation,
+                 pipeline_morphology, pipeline_phase_analysis)
 pre = pipeline_tem("imagen.dm3", show=False)        # Etapa 1: preprocesamiento
 seg = pipeline_segmentation(pre, show=False)        # Etapa 2: segmentación
-mor = pipeline_morphology(seg)                      # Etapa 3: morfología
+mor = pipeline_morphology(seg, show=False)          # Etapa 3: morfología
+res = pipeline_phase_analysis(mor)                  # Etapa 4: análisis de fases
 ```
 
-Para correr las tres etapas sobre una imagen o una carpeta:
+Para correr las cuatro etapas sobre una imagen o una carpeta:
 `uv run python scripts/analizar_tem.py "RUTA"`.
 
 Documentación completa: [docs/tem.md](docs/tem.md).
