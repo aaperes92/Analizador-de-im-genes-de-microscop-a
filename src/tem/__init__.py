@@ -60,6 +60,26 @@ from .spatial import (
 )
 from .phase_analysis import pipeline_phase_analysis
 
+# Etapa 4.5: patrones de difracción (SAED, NBED, perfil 1D)
+from .diffraction import (
+    analyze_1d_profile,
+    analyze_spot_geometry,
+    compute_radial_profile,
+    correct_center_interactive,
+    detect_beam_stopper,
+    detect_diffraction_rings,
+    detect_diffraction_spots,
+    detect_pattern_type,
+    electron_wavelength,
+    estimate_crystallite_size,
+    find_beam_center,
+    is_diffraction_pattern,
+    pipeline_diffraction,
+    preprocess_diffraction,
+    read_camera_metadata,
+    show_diffraction_results,
+)
+
 __all__ = [
     # Etapa 1
     "load_tem_image",
@@ -108,4 +128,21 @@ __all__ = [
     "pipeline_spatial",
     # Etapa 4 — pipeline maestro
     "pipeline_phase_analysis",
+    # Etapa 4.5 — difracción
+    "is_diffraction_pattern",
+    "detect_pattern_type",
+    "read_camera_metadata",
+    "electron_wavelength",
+    "find_beam_center",
+    "correct_center_interactive",
+    "detect_beam_stopper",
+    "preprocess_diffraction",
+    "compute_radial_profile",
+    "detect_diffraction_rings",
+    "estimate_crystallite_size",
+    "detect_diffraction_spots",
+    "analyze_spot_geometry",
+    "analyze_1d_profile",
+    "show_diffraction_results",
+    "pipeline_diffraction",
 ]

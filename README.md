@@ -68,7 +68,18 @@ mor = pipeline_morphology(seg, show=False)          # Etapa 3: morfología
 res = pipeline_phase_analysis(mor)                  # Etapa 4: análisis de fases
 ```
 
-Para correr las cuatro etapas sobre una imagen o una carpeta:
-`uv run python scripts/analizar_tem.py "RUTA"`.
+Si la imagen es un patrón de difracción (SAED de anillos o de puntos,
+NBED, amorfo o perfil 1D), la Etapa 4.5 detecta el centro del haz
+aunque lo tape el beam stopper, mide los espaciados d de los anillos,
+el tamaño de cristalito (Scherrer) y la red de los spots:
+
+```python
+from tem import pipeline_diffraction
+dif = pipeline_diffraction("patron.dm3")             # Etapa 4.5: difracción
+```
+
+Para correr todo sobre una imagen o una carpeta (detecta solo cuáles
+son patrones de difracción): `uv run python scripts/analizar_tem.py
+"RUTA"`; con `--difraccion` se fuerza el análisis de difracción.
 
 Documentación completa: [docs/tem.md](docs/tem.md).

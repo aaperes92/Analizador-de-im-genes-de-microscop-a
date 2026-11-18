@@ -4,7 +4,8 @@ Parte del proyecto **Analizador de Imágenes de Microscopía**.
 Autor del módulo: Daniel Romero (daniel.romero@ib.edu.ar).
 
 El módulo `tem` trabaja con imágenes de microscopía electrónica de
-transmisión (TEM) en cuatro etapas:
+transmisión (TEM) en cuatro etapas, más una etapa aparte para los
+patrones de difracción:
 
 1. **[Etapa 1 — Carga y preprocesamiento](#etapa-1--carga-y-preprocesamiento)**:
    lee la imagen, la normaliza a [0, 1] y reduce el ruido.
@@ -23,17 +24,27 @@ transmisión (TEM) en cuatro etapas:
    [`compositional.py`](../src/tem/compositional.py),
    [`spatial.py`](../src/tem/spatial.py) y
    [`phase_analysis.py`](../src/tem/phase_analysis.py).
+5. **[Etapa 4.5 — Patrones de difracción](#etapa-45--patrones-de-difracción)**:
+   si la imagen es un patrón de difracción (SAED de anillos o de
+   puntos, NBED, amorfo o perfil 1D) en lugar de una imagen de campo
+   claro u oscuro: centro del haz, anillos y espaciados d, tamaño de
+   cristalito (Scherrer), spots y red recíproca.
+   Código: [`src/tem/diffraction.py`](../src/tem/diffraction.py).
 
-Tests: [`tests/tem/`](../tests/tem/) (153 tests, `uv run pytest`).
+Tests: [`tests/tem/`](../tests/tem/) (237 tests, `uv run pytest`).
 
 **Análisis completo en un paso**: [`scripts/analizar_tem.py`](../scripts/analizar_tem.py)
-corre las cuatro etapas sobre una imagen o una carpeta, muestra las
-8 figuras y guarda un resumen en CSV con las métricas de todas las
-etapas. Se configura editando la sección CONFIGURACIÓN del archivo
-(ruta, filtro, umbral, fases y `FONDO`) o pasando la ruta:
+revisa cada imagen: si es un patrón de difracción corre la Etapa 4.5 y
+si no, las cuatro etapas, con sus 8 figuras. Guarda un resumen en CSV
+con las métricas de todas las etapas (los patrones de difracción van en
+un CSV aparte, `<nombre>_resumen_difraccion.csv`). Se configura
+editando la sección CONFIGURACIÓN del archivo (ruta, filtro, umbral,
+fases, `FONDO`, `DIFRACCION` y `ANCHO_INSTRUMENTAL`) o pasando la ruta;
+`--difraccion` analiza la imagen como patrón sin detectarlo:
 
 ```bash
 uv run python scripts/analizar_tem.py "RUTA\imagen.dm3"
+uv run python scripts/analizar_tem.py "RUTA\patron.dm3" --difraccion
 ```
 
 ---
@@ -941,3 +952,265 @@ una carpeta (imprime una tabla) y, en los del Módulo C,
 - **Pocas partículas**: con menos de 10, la distribución espacial no se
   clasifica.
 - **Unidades**: todo en píxeles.
+
+---
+
+# Etapa 4.5 — Patrones de difracción
+
+Se activa cuando la imagen es un **patrón de difracción** y no una
+imagen de campo claro u oscuro. En lugar de partículas mide el
+espacio recíproco: espaciados interplanares d, tamaño de cristalito y
+geometría de la red. Código:
+[`src/tem/diffraction.py`](../src/tem/diffraction.py).
+
+## Uso rápido
+
+```python
+from tem import pipeline_diffraction
+
+res = pipeline_diffraction("patron.dm3")          # todo, con ventanas
+res = pipeline_diffraction("patron.dm3", interactive=False, show=False)
+
+res["pattern_type"]                    # 'anillos', 'puntos', 'nbed',
+                                       # 'amorfo' o 'perfil_1d'
+res["results"]["anillos"]["anillos"]   # d (Å), FWHM... de cada anillo
+res["results"]["cristalito"]           # Scherrer
+```
+
+Si la imagen no es de difracción devuelve `{'es_difraccion': False}`.
+Con `force=True` (o `--difraccion` en los scripts) se analiza igual.
+Con `interactive=True` pide por teclado los metadatos que faltan y abre
+una ventana para aceptar o corregir el centro del haz. La figura se
+guarda en `data/samples/<nombre>_difraccion.png`.
+
+## Bloque 1 — ¿Es difracción? Tipo de patrón y metadatos
+
+### `is_diffraction_pattern`
+
+Si los metadatos dicen modo `DIFFRACTION`, eso decide. Si no, se miden
+tres cosas alrededor del centro de simetría del patrón (con el beam
+stopper y las zonas sin señal excluidos):
+
+1. **Simetría puntual**: correlación de la imagen con su rotación de
+   180° ≥ 0.5, con el centro a más de 15 % del borde.
+2. **Decaimiento radial**: la intensidad baja con el radio (halo).
+3. **Uniformidad azimutal**: en cada radio la intensidad es pareja
+   alrededor del centro (IQR/mediana ≤ 0.26), como en un anillo.
+
+**Tienen que votar las tres.** Las heurísticas de la especificación no
+separaban las imágenes reales (la fracción de píxeles > 0.8 queda
+debajo de 0.05 en todas por la normalización, y la FFT tiene picos en
+las imágenes HR por las franjas de red), y con voto mayoritario 9 de
+22 imágenes de campo claro y oscuro daban "difracción": una partícula
+grande en campo oscuro o un gradiente de iluminación cumplen 1 y 2.
+Solo la uniformidad azimutal las separa. Con las tres, **las 28
+imágenes de prueba se clasifican bien** (6 patrones y 22 imágenes).
+
+### `detect_pattern_type`
+
+| Tipo | Criterio |
+|---|---|
+| `perfil_1d` | relación de aspecto > 3:1 o variación en un solo eje |
+| `anillos` | un anillo que cubre ≥ 75 % de la circunferencia, o dos ≥ 50 % |
+| `puntos` | ≥ 10 spots intensos sin anillos continuos |
+| `nbed` | como puntos, con spots anchos (FWHM > 5 % de su radio) |
+| `amorfo` | ni anillos ni spots: solo un halo difuso |
+
+La **cobertura** de cada anillo se mide en 36 sectores (¿sobresale el
+anillo de su entorno en ese sector?). Reemplaza a la transformada de
+Hough, muy lenta en imágenes de 2048 px. El tipo `amorfo` no está en la
+especificación; se agregó porque Frame5 es un halo amorfo.
+
+### `read_camera_metadata`
+
+Lee los tags del `.dm3` (con ncempy) o del `.tif` (con exifread):
+voltaje, longitud de cámara, magnificación, píxel de la imagen y del
+detector, modo de operación y fecha. Calcula:
+
+- **Longitud de onda** relativista: λ = 12.2643 / √(V·(1 + 0.97848·10⁻⁶·V))
+  Å, con V en voltios (0.02508 Å a 200 kV). La fórmula de la
+  especificación mezclaba unidades y daba 0.0002 o 0.079 Å.
+- **Calibración** (1/Å por píxel), en este orden: la escala recíproca
+  del archivo (1/nm), o λL / píxel del **detector** (no el píxel de la
+  imagen, que es de la muestra), o valores pedidos o por defecto.
+- En modo difracción, DigitalMicrograph guarda la **longitud de cámara
+  en el campo de magnificación** (Frame15: 137.17 mm; la calibración
+  del archivo da 137.18 mm).
+
+Los datos que faltan se piden por teclado con `interactive=True`; con
+`False` se usan los valores por defecto (200 kV, 1000 mm, 14 µm) y la
+`fuente` lo dice. **Ojo con diff1–diff3**: sus metadatos son de modo
+imagen (110kx, 0.043 nm/px), así que su calibración es la de por
+defecto y los d en Å no son reales (los cocientes entre anillos sí).
+
+## Bloque 2 — Centro del haz y preprocesamiento
+
+### `find_beam_center`
+
+En los patrones reales el haz directo está **tapado por el beam
+stopper**: el centro de masa y la gaussiana de la especificación caen
+sobre el halo, a ~200 px del centro, y la mediana de los métodos
+arrastra ese error. Se calculan cuatro centros:
+
+| Método | Idea |
+|---|---|
+| Simetría del halo | correlación con la rotación de 180° (FFT, sin el stopper) |
+| Nitidez de anillos | refina el anterior: con el centro correcto los anillos son finos |
+| Centro de masa (p95) | de la especificación |
+| Gaussiana 2D | de la especificación (sirve si el haz está a la vista) |
+
+y se elige el que deja el **halo más uniforme alrededor** (una
+verificación independiente de los métodos). Si métodos casi igual de
+buenos difieren en más de 5 px, avisa. Con los anillos, el error es
+menor que 2 px en los 5 patrones con anillos (en diff1 la simetría
+sola quedaba a 72 px).
+
+### `correct_center_interactive`
+
+Ventana con la imagen, una cruz en el centro y los anillos como
+círculos guía (si el centro está bien, caen sobre los anillos).
+Botones **Aceptar centro** y **Corregir manualmente** (cada click mueve
+la cruz; **Confirmar** acepta). Sin pantalla devuelve el centro igual.
+
+### `detect_beam_stopper` y `preprocess_diffraction`
+
+El stopper se detecta como la zona mucho más oscura que la mediana de
+su anillo, se completa con la punta (que pasa del centro) y se
+prolonga hasta el borde en línea recta. El preprocesamiento aplica
+`log(1 + 100·I)` (con la imagen en [0, 1], `log(1 + I)` sería casi
+lineal), un suavizado con sigma 0.5 y pone **NaN en el haz directo y en
+el stopper**. No se traslada la imagen para centrarla: interpolar mueve
+intensidades y pierde los bordes; todo usa el centro detectado.
+
+## Bloque 3 — Anillos (policristalino)
+
+- **`compute_radial_profile`**: I(r) promediando cada radio (±0.5 px)
+  sin los NaN; d = 1 / (r · calibración) = λL / R y q = 1/d.
+- **`detect_diffraction_rings`**: picos del perfil sin el halo con
+  prominencia ≥ 8 veces el ruido del perfil, distancia ≥ 3 % de r_max y
+  ancho ≥ 2 px. El criterio de la especificación (10 % del rango) no
+  encontraba **ningún** anillo en diff1 ni diff3: el halo ocupa casi
+  todo el rango. Cada pico se mide contra una **línea de base local**
+  (recta y después cuadrática con los puntos lejos del pico): con una
+  base global el pico salía corrido y hasta 30 % más angosto.
+  Devuelve también **(d₁/d)²**: en una red cúbica sigue la serie
+  h² + k² + l² (FCC: 1, 1.33, 2.67, 3.67, 4), el primer paso para
+  indexar a mano.
+- **`estimate_crystallite_size`**: Scherrer, D = Kλ/(β·cos θ) con
+  K = 0.94. En electrones θ es tan chico que D ≈ K/Δq. **Sin restar el
+  ancho instrumental (`instrumental_fwhm_px`), D es un tamaño mínimo**;
+  se avisa si sale fuera de 2-100 nm.
+
+## Bloque 4 — Spots (monocristal y NBED)
+
+- **`detect_diffraction_spots`**: se resta el halo, se suaviza con el
+  tamaño de un spot y se divide por el **ruido local** (bloques de
+  64 px). El umbral de la especificación (percentil 90 de la imagen)
+  daba 31 608 "spots" de ruido en Frame9. Se mantienen la distancia
+  mínima de 5 px y la exclusión del 3 % central. Simetría de Friedel:
+  cada spot debería tener otro opuesto al centro (±3 px); solo cuentan
+  los que tienen el opuesto dentro de la imagen y fuera del stopper.
+- **`analyze_spot_geometry`**: familias de planos (spots con el mismo d,
+  ±5 %), ángulos característicos (entre spots de una misma familia: 60°
+  y 120° en una red hexagonal; con todos los pares el histograma se
+  aplana) y red recíproca: los dos vectores más cortos, reducidos
+  (Lagrange-Gauss) y **ajustados por mínimos cuadrados** con todos los
+  spots. Red real: a = 1/(a*·sen γ*), b = 1/(b*·sen γ*), γ = 180° − γ*
+  (la especificación usaba a = 1/a*, que solo vale si γ* = 90°).
+  La **fracción indexada** (spots que caen en h·a* + k·b*) vale ≈ 1 en
+  un monocristal y es baja si el patrón viene de varios cristales.
+
+## Bloque 5 — Perfil 1D
+
+**`analyze_1d_profile`**: detecta el eje principal, colapsa el otro y
+busca el **origen** (el haz directo), que la especificación no
+definía: si el perfil es simétrico como un espejo, es un corte de dos
+lados y se promedian ambos; si no, el origen está en el extremo más
+brillante (el máximo del perfil no sirve: con stopper es el anillo más
+intenso). Después usa los mismos criterios de picos y Scherrer que el
+Bloque 3 y un suavizado de Savitzky-Golay (11, 3) para visualizar.
+
+## Bloque 6 — Figura y pipeline
+
+**`show_diffraction_results`** arma 4 paneles según el tipo:
+
+| Tipo | Paneles |
+|---|---|
+| anillos / amorfo | imagen con los anillos y su d · I vs d · I vs q · tabla (d, q, FWHM, Scherrer) |
+| puntos / NBED | spots por familia · red recíproca con a* y b* · histograma de d · familias y red |
+| perfil 1D | perfil original · I vs d · I vs q · tabla de picos |
+
+con λL y la calibración en una esquina. **`pipeline_diffraction`**
+encadena todo: metadatos (primero, porque el modo de operación ayuda a
+decidir) → ¿difracción? → centro (y corrección manual) → tipo →
+preprocesamiento → análisis según el tipo → figura. En un patrón amorfo
+informa los máximos del halo sin Scherrer (no son anillos de Bragg).
+
+## Resultados con los patrones de prueba
+
+| Imagen | Tipo | Resultado |
+|---|---|---|
+| Frame15 | anillos | 8 anillos: 2.63, **2.14, 1.83**, 1.53, **1.30, 1.11**, 0.84, 0.75 Å; Scherrer ≥ 2.5 nm |
+| Frame9 | puntos | 128 spots en los mismos d que Frame15; simetría 0.07 e indexados 5 %: pocos granos, no un monocristal |
+| Frame5 | amorfo | halo difuso con máximo en d ≈ 4.3 Å |
+| diff1 | anillos | (d₁/d)² = 1, 1.32, 2.66: serie **FCC** (111, 200, 220) |
+| diff3 | anillos | (d₁/d)² = 1, 1.34, 2.68, 4.02: serie **FCC** (111, 200, 220, 222) |
+| diff2 | anillos | un anillo continuo de spots (textura) |
+
+En Frame15 los anillos en negrita siguen una serie FCC; 2.63 y 1.53 Å
+no son de esa red (puede ser una segunda fase). En diff1-3 los d en Å
+dependen de la longitud de cámara, que no está en los metadatos: los
+cocientes son confiables, los valores absolutos no.
+
+## Scripts de prueba por bloque
+
+En [`scripts/difraccion/`](../scripts/difraccion/):
+
+| Script | Qué muestra |
+|---|---|
+| `b1_tipo_y_metadatos.py` | votos, tipo de patrón, metadatos; centro y anillos sobre la imagen |
+| `b2_centro.py` | los cuatro centros, la ventana de corrección y lo enmascarado |
+| `b3_anillos.py` | anillos con d, perfil con FWHM y Scherrer (acepta el ancho instrumental) |
+| `b4_spots.py` | spots por familia, red recíproca, d y ángulos (`--sintetico`: red hexagonal) |
+| `b5_perfil_1d.py` | perfil 1D desde un archivo, `--desde-patron` o `--sintetico` |
+| `b6_pipeline.py` | pipeline completo (`--difraccion`; `--sintetico`: los cinco tipos) |
+
+Con una carpeta, los scripts b1-b4 imprimen una fila por imagen.
+
+## Constantes ajustables
+
+| Constante | Valor | Qué controla |
+|---|---|---|
+| `SYMMETRY_MIN` / `DECAY_MIN` / `AZIMUTHAL_IQR_MAX` | 0.5 / 0.5 / 0.26 | Votos de `is_diffraction_pattern` |
+| `CENTER_BORDER_MIN` | 0.15 | Distancia mínima del centro al borde (fracción del lado) |
+| `RING_STRONG_COVERAGE` / `RING_COVERAGE` | 0.75 / 0.5 | Cobertura para llamar "anillos" |
+| `MIN_SPOTS` / `NBED_WIDTH_FRACTION` | 10 / 0.05 | Puntos frente a amorfo; NBED frente a puntos |
+| `DEFAULT_VOLTAGE_KV` / `DEFAULT_CAMERA_LENGTH_MM` / `DEFAULT_DETECTOR_PIXEL_UM` | 200 / 1000 / 14 | Valores por defecto si faltan metadatos |
+| `CENTER_SPREAD_WARN` | 5 px | Aviso de centro impreciso |
+| `BEAM_MASK_FRACTION` | 0.02 | Radio del haz directo enmascarado |
+| `LOG_GAIN` / `PREPROCESS_SIGMA` | 100 / 0.5 | Vista logarítmica y suavizado |
+| `RING_SIGNIFICANCE` / `RING_MIN_DISTANCE` | 8 / 0.03 | Detección de anillos |
+| `SCHERRER_K` / `SCHERRER_RANGE_NM` | 0.94 / (2, 100) | Scherrer |
+| `SPOT_DETECT_SIGMA` / `SPOT_NOISE_BLOCK` | 6 / 64 px | Detección de spots |
+| `SPOT_PAIR_TOL` / `SPOT_SYMMETRY_MIN` | 3 px / 0.7 | Pares de Friedel |
+| `FAMILY_TOLERANCE` / `LATTICE_TOLERANCE` | 0.05 / 0.1 | Familias e indexado |
+| `PROFILE_SYMMETRY_MIN` | 0.9 | Perfil 1D de dos lados |
+
+## Limitaciones conocidas
+
+- **Calibración**: sin escala recíproca ni longitud de cámara en el
+  archivo, los d en Å dependen de los valores por defecto (diff1-diff3).
+  Los cocientes entre anillos no dependen de la calibración.
+- **Scherrer**: sin el ancho instrumental, D es un mínimo. En estos
+  patrones los anillos de Frame9 (granos grandes) son tan anchos como
+  los de Frame15: el ancho es sobre todo instrumental.
+- **Sin casos reales de monocristal, NBED ni perfil 1D**: esos análisis
+  están validados con datos sintéticos (y el perfil 1D, con un perfil
+  armado desde Frame15).
+- **Umbrales calibrados con 28 imágenes** (6 patrones): con otros
+  microscopios o cámaras puede hacer falta ajustarlos.
+- **No se identifica el material**: los d y los cocientes permiten
+  indexar a mano, pero no hay una base de datos de estructuras.
+- **Perfil 1D con stopper**: el borde de la zona del stopper puede
+  aparecer como un pico de d grande; es el primero y no tiene forma de
+  anillo.

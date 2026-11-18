@@ -1,8 +1,10 @@
 """Análisis TEM completo: preprocesamiento, segmentación, morfología y
-análisis de fases.
+análisis de fases, o análisis de difracción.
 
 Corre las cuatro etapas del módulo TEM sobre una imagen o sobre todas
-las imágenes de una carpeta.
+las imágenes de una carpeta. Antes revisa cada imagen: si es un patrón
+de difracción (o se pasa --difraccion), corre la Etapa 4.5 y saltea las
+Etapas 2 a 4.
 
 Cómo usarlo (desde la raíz del proyecto):
 
@@ -11,12 +13,16 @@ Cómo usarlo (desde la raíz del proyecto):
            uv run python scripts/analizar_tem.py
        o pasá la ruta directamente, sin editar el archivo:
            uv run python scripts/analizar_tem.py "C:\\ruta\\imagen.dm3"
+       y agregá --difraccion para analizarla como patrón de difracción
+       sin detectarlo:
+           uv run python scripts/analizar_tem.py "RUTA" --difraccion
 
 Con una imagen: muestra en pantalla las figuras de cada etapa (cerrá
 cada ventana para pasar a la siguiente) e imprime todos los
 resultados.
 Con una carpeta: procesa todas las imágenes sin abrir ventanas, imprime
-una tabla y guarda un resumen en CSV.
+una tabla y guarda un resumen en CSV (los patrones de difracción van en
+un CSV aparte, <carpeta>_resumen_difraccion.csv).
 
 Todas las figuras se guardan en data/samples/ (o en CARPETA_SALIDA).
 
@@ -60,6 +66,16 @@ FASES = None
 #   ocupan más de la mitad de la imagen.
 FONDO = None
 
+# Etapa 4.5 — patrones de difracción:
+#   None = detecta sola cuáles imágenes son de difracción,
+#   True = analiza todas como difracción (igual que --difraccion),
+#   False = nunca (siempre Etapas 2-4)
+DIFRACCION = None
+
+# Etapa 4.5 — ancho instrumental (px) que se resta en Scherrer
+#   (0 = no se resta y los tamaños son mínimos)
+ANCHO_INSTRUMENTAL = 0.0
+
 # Mostrar las figuras en pantalla (solo con una imagen)
 MOSTRAR_FIGURAS = True
 
@@ -75,17 +91,43 @@ RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "src"))
 
 from tem import (  # noqa: E402
+    is_diffraction_pattern,
+    pipeline_diffraction,
     pipeline_morphology,
     pipeline_segmentation,
     pipeline_tem,
+    read_camera_metadata,
 )
 from tem.fraction import phase_names, phase_title  # noqa: E402
-from tem.loader import DEFAULT_OUTPUT_DIR, SUPPORTED_FORMATS  # noqa: E402
+from tem.loader import (  # noqa: E402
+    DEFAULT_OUTPUT_DIR,
+    SUPPORTED_FORMATS,
+    load_tem_image,
+)
 from tem.phase_analysis import pipeline_phase_analysis  # noqa: E402
 
 
+def es_difraccion(path: Path) -> tuple[bool, object]:
+    """Decide si la imagen se analiza como patrón de difracción.
+
+    Args:
+        path: Ruta a la imagen.
+
+    Returns:
+        (True si es difracción, imagen cargada o None).
+    """
+    if DIFRACCION is False:
+        return False, None
+    with contextlib.redirect_stdout(io.StringIO()):
+        image = load_tem_image(path)
+        if DIFRACCION:
+            return True, image
+        meta = read_camera_metadata(path, interactive=False)
+        return is_diffraction_pattern(image, meta, verbose=False), image
+
+
 def analizar(path: Path, mostrar: bool) -> dict:
-    """Corre las cuatro etapas sobre una imagen.
+    """Corre las cuatro etapas (o la Etapa 4.5) sobre una imagen.
 
     Args:
         path: Ruta a la imagen.
@@ -93,10 +135,20 @@ def analizar(path: Path, mostrar: bool) -> dict:
 
     Returns:
         Diccionario con los resultados de cada etapa ('etapa1' a
-        'etapa4') y el tiempo total en segundos ('segundos').
+        'etapa4') o con 'difraccion' (Etapa 4.5), y el tiempo total en
+        segundos ('segundos').
     """
     inicio = time.perf_counter()
     salida = sys.stdout if mostrar else io.StringIO()
+    difraccion, imagen = es_difraccion(path)
+    if difraccion:
+        with contextlib.redirect_stdout(salida):
+            resultado = pipeline_diffraction(
+                path, image=imagen, force=True, interactive=mostrar,
+                instrumental_fwhm_px=ANCHO_INSTRUMENTAL,
+                output_dir=CARPETA_SALIDA, show=mostrar)
+        return {"difraccion": resultado,
+                "segundos": time.perf_counter() - inicio}
     with contextlib.redirect_stdout(salida):
         print("\n" + "=" * 70)
         print(f"ETAPA 1 — Carga y preprocesamiento: {path.name}")
@@ -212,6 +264,80 @@ def _redondear(valor: float | None,
     return int(round(valor)) if decimales == 0 else round(valor, decimales)
 
 
+def fila_difraccion(path: Path, r: dict) -> dict:
+    """Arma la fila de resumen de un patrón de difracción.
+
+    Args:
+        path: Ruta a la imagen.
+        r: Resultado de analizar() con 'difraccion'.
+
+    Returns:
+        Diccionario con archivo, tipo, calibración, centro, cantidad de
+        picos o spots, los d (Å), el tamaño de Scherrer medio y, para
+        spots, la simetría, la fracción indexada y la red.
+    """
+    d = r["difraccion"]
+    res = d["results"]
+    meta = d["metadata"]
+    fila = {
+        "archivo": path.name,
+        "tipo": d["pattern_type"],
+        "calibracion_inv_A_px": round(meta["calibracion_inv_angs_px"], 7),
+        "fuente_calibracion": meta["fuente"],
+        "centro_y": "" if d["center"] is None else round(d["center"][0], 1),
+        "centro_x": "" if d["center"] is None else round(d["center"][1], 1),
+        "n_picos_o_spots": "",
+        "d_A": "",
+        "scherrer_medio_nm": "",
+        "simetria_friedel": "",
+        "fraccion_indexada": "",
+        "red_a_A": "",
+        "red_b_A": "",
+        "red_gamma_deg": "",
+    }
+    if "anillos" in res or "perfil_1d" in res:
+        picos = (res["anillos"] if "anillos" in res
+                 else res["perfil_1d"]["picos"])
+        cristal = (res.get("cristalito") if "anillos" in res
+                   else res["perfil_1d"]["cristalito"])
+        fila["n_picos_o_spots"] = picos["n_anillos"]
+        fila["d_A"] = " ".join(f"{a['d_angs']:.3f}"
+                               for a in picos["anillos"])
+        if cristal and cristal["D_medio_nm"] is not None:
+            fila["scherrer_medio_nm"] = round(cristal["D_medio_nm"], 1)
+    else:
+        spots, geo = res["spots"], res["geometria"]
+        fila["n_picos_o_spots"] = spots["n_spots"]
+        fila["d_A"] = " ".join(f"{f['d_angs']:.3f}"
+                               for f in geo["familias"]
+                               if f["d_angs"] and f["n_spots"] >= 3)
+        fila["simetria_friedel"] = _redondear(spots["indice_simetria"], 2)
+        fila["fraccion_indexada"] = _redondear(geo["fraccion_indexada"], 2)
+        red = geo["red"]
+        if red is not None and red["a_angs"] is not None:
+            fila["red_a_A"] = round(red["a_angs"], 3)
+            fila["red_b_A"] = round(red["b_angs"], 3)
+            fila["red_gamma_deg"] = round(red["gamma_deg"], 1)
+    fila["segundos"] = round(r["segundos"], 1)
+    return fila
+
+
+def imprimir_difraccion(filas: list[dict]) -> None:
+    """Imprime el resumen de los patrones de difracción.
+
+    Args:
+        filas: Filas de fila_difraccion().
+    """
+    print(f"\n{'archivo (difracción)':30} {'tipo':>9} {'n':>4} "
+          f"{'Scherrer':>9} {'calibración':>12}  d (Å)")
+    for f in filas:
+        nm = f["scherrer_medio_nm"]
+        print(f"{f['archivo'][:30]:30} {f['tipo']:>9} "
+              f"{f['n_picos_o_spots']:>4} "
+              f"{(f'{nm} nm' if nm != '' else '-'):>9} "
+              f"{f['fuente_calibracion']:>12}  {f['d_A'][:60]}")
+
+
 def imprimir_tabla(filas: list[dict]) -> None:
     """Imprime el resumen como tabla.
 
@@ -229,19 +355,21 @@ def imprimir_tabla(filas: list[dict]) -> None:
               f"{f.get('rdf', '-'):>12} {f.get('hopkins', '-'):>12}")
 
 
-def guardar_csv(filas: list[dict], nombre: str) -> Path:
+def guardar_csv(filas: list[dict], nombre: str,
+                sufijo: str = "resumen_tem") -> Path:
     """Guarda el resumen en un CSV (se abre bien con Excel).
 
     Args:
         filas: Filas de filas_resumen().
         nombre: Nombre base del archivo.
+        sufijo: Final del nombre ('resumen_tem' o 'resumen_difraccion').
 
     Returns:
         Ruta del CSV.
     """
     carpeta = Path(CARPETA_SALIDA) if CARPETA_SALIDA else DEFAULT_OUTPUT_DIR
     carpeta.mkdir(parents=True, exist_ok=True)
-    destino = carpeta / f"{nombre}_resumen_tem.csv"
+    destino = carpeta / f"{nombre}_{sufijo}.csv"
     # utf-8-sig, ';' y coma decimal para que Excel en español lo abra
     # con los números como números
     con_coma = [
@@ -259,20 +387,31 @@ def guardar_csv(filas: list[dict], nombre: str) -> Path:
 
 def main() -> None:
     """Analiza la imagen o la carpeta configurada."""
-    ruta = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(RUTA)
+    global DIFRACCION
+    args = [a for a in sys.argv[1:] if a != "--difraccion"]
+    if "--difraccion" in sys.argv[1:]:
+        DIFRACCION = True
+    ruta = Path(args[0]) if args else Path(RUTA)
     if not ruta.exists():
         print(f"No existe: {ruta}\nRevisá RUTA en la configuración.")
         sys.exit(1)
 
     if ruta.is_file():
         resultado = analizar(ruta, mostrar=MOSTRAR_FIGURAS)
-        filas = filas_resumen(ruta, resultado)
         print("\n" + "=" * 70)
         print(f"RESUMEN ({resultado['segundos']:.1f} s)")
         print("=" * 70)
-        imprimir_tabla(filas)
-        if filas:
-            print(f"\nCSV: {guardar_csv(filas, ruta.stem)}")
+        if "difraccion" in resultado:
+            if resultado["difraccion"]["es_difraccion"]:
+                fila = fila_difraccion(ruta, resultado)
+                imprimir_difraccion([fila])
+                print(f"\nCSV: "
+                      f"{guardar_csv([fila], ruta.stem, 'resumen_difraccion')}")
+        else:
+            filas = filas_resumen(ruta, resultado)
+            imprimir_tabla(filas)
+            if filas:
+                print(f"\nCSV: {guardar_csv(filas, ruta.stem)}")
         print(f"Figuras: {CARPETA_SALIDA or DEFAULT_OUTPUT_DIR}")
         return
 
@@ -284,6 +423,7 @@ def main() -> None:
     print(f"Analizando {len(imagenes)} imágenes de {ruta} "
           "(sin abrir ventanas)...")
     filas: list[dict] = []
+    filas_dif: list[dict] = []
     for i, imagen in enumerate(imagenes, start=1):
         print(f"  [{i}/{len(imagenes)}] {imagen.name}", end="", flush=True)
         try:
@@ -291,11 +431,20 @@ def main() -> None:
         except Exception as error:  # una imagen mala no frena el resto
             print(f"  → ERROR: {error}")
             continue
-        filas.extend(filas_resumen(imagen, resultado))
-        print(f"  ({resultado['segundos']:.1f} s)")
-    imprimir_tabla(filas)
+        if "difraccion" in resultado:
+            filas_dif.append(fila_difraccion(imagen, resultado))
+            tipo = f"difracción: {resultado['difraccion']['pattern_type']}"
+        else:
+            filas.extend(filas_resumen(imagen, resultado))
+            tipo = "Etapas 1-4"
+        print(f"  ({tipo}, {resultado['segundos']:.1f} s)")
     if filas:
+        imprimir_tabla(filas)
         print(f"\nCSV: {guardar_csv(filas, ruta.name)}")
+    if filas_dif:
+        imprimir_difraccion(filas_dif)
+        destino = guardar_csv(filas_dif, ruta.name, "resumen_difraccion")
+        print(f"\nCSV: {destino}")
     print(f"Figuras: {CARPETA_SALIDA or DEFAULT_OUTPUT_DIR}")
 
 
