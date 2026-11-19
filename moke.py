@@ -201,12 +201,14 @@ def analizadorMOKE(background, carpeta, salida="resultados", escala=1.0, unidad=
     # Excluir el fondo ANTES de int(f.stem): puede llamarse background.png.
     archivos = [
         f for f in carpeta.iterdir()
-        if f.is_file() and f.suffix.lower() == ".png" or f.suffix.lower() == ".jpg"
+        if f.is_file() and (f.suffix.lower() == ".png" or f.suffix.lower() == ".jpg")
         and f.resolve() != archivo_fondo
     ]
+    print("Archivos encontrados:", [f.name for f in archivos])
     if not archivos:
         raise ValueError("No hay imágenes PNG o JPG para analizar, aparte del fondo.")
     if any(not f.stem.isdecimal() for f in archivos):
+        
         raise ValueError("Las imágenes a analizar deben llamarse 0.png, 1.png, 2.png, etc.")
     archivos.sort(key=lambda f: int(f.stem))
     salida.mkdir(parents=True, exist_ok=True)
