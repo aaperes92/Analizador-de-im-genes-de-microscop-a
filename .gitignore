@@ -12,3 +12,9 @@
 
 # workspace
 *.code-workspace
+# resultados generados
+mascaras_roi/
+
+# python
+__pycache__/
+*.pyc
