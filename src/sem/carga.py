@@ -1,7 +1,11 @@
-"""
-Etapa 1 del pipeline SEM: carga de imagen, metadata y selección de región de interés (ROI).
+"""Carga de imágenes SEM: lectura, metadata de adquisición y selección de la región de interés.
 
-Alcance: imágenes SEM (.tif de FEI/Thermo y Zeiss). TEM y MOKE se tratan en otros módulos.
+Lee imágenes SEM (.tif de FEI/Thermo y Zeiss), interpreta su metadata (tamaño de píxel,
+voltaje, detector...), quita la barra de datos, permite seleccionar una ROI y la guarda.
+
+Parte del módulo SEM del proyecto "Analizador de Imágenes de Microscopía".
+
+Autor: Mauricio Romano (mauricio.romano@ib.edu.ar)
 """
 
 import json
@@ -309,7 +313,7 @@ def guardar_roi(
 
     Estructura: ruta_mascaras/<nombre_base>/<nombre_base><sufijo>/roi_<nombre_base><sufijo>.{npy,tif,json}
     El .json guarda las coordenadas, el archivo de origen y, si hay metadata, el tamaño de
-    píxel y los datos de adquisición, para que las etapas siguientes midan en unidades reales.
+    píxel y los datos de adquisición, para que el análisis posterior mida en unidades reales.
 
     Parameters
     ----------

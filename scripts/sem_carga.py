@@ -1,11 +1,17 @@
-"""
-Etapa 1 del pipeline SEM: carga de imagen, metadata, visualización, selección y guardado del ROI.
+"""Carga SEM: lee una imagen, muestra su diagnóstico y guarda la ROI seleccionada.
 
-Uso:
-    python etapa1_carga.py <ruta_imagen> [--salida CARPETA] [--sufijo SUFIJO]
+Pasos: carga la imagen y su metadata, quita la barra de datos, muestra la imagen con su
+histograma, abre el selector de ROI y guarda la ROI (.npy, .tif y .json).
+
+Cómo usarlo (desde la raíz del proyecto):
+
+    uv run python scripts/sem_carga.py <ruta_imagen> [--salida CARPETA] [--sufijo SUFIJO]
 
 Ejemplo:
-    python etapa1_carga.py imagenes/SEM/BSE/BSE_1.tif
+
+    uv run python scripts/sem_carga.py imagenes/SEM/BSE/BSE_1.tif
+
+Autor: Mauricio Romano (mauricio.romano@ib.edu.ar)
 """
 
 import argparse
@@ -14,7 +20,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from analizador_sem.carga import (
+# Permite importar el paquete sem desde src/
+RAIZ = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RAIZ / "src"))
+
+from sem.carga import (  # noqa: E402
     cargar_imagen,
     guardar_roi,
     leer_metadata,
@@ -23,14 +33,17 @@ from analizador_sem.carga import (
     seleccionar_roi,
 )
 
+# Carpeta por defecto donde se guardan las ROIs (data/ no se versiona en git)
+CARPETA_ROI: Path = RAIZ / "data" / "sem" / "roi"
+
 
 def main() -> int:
-    """Ejecuta la Etapa 1 sobre la imagen pasada por línea de comandos. Retorna el código de salida."""
-    parser = argparse.ArgumentParser(description="Etapa 1 SEM: carga, metadata y selección de ROI.")
+    """Ejecuta la carga sobre la imagen pasada por línea de comandos. Retorna el código de salida."""
+    parser = argparse.ArgumentParser(description="SEM: carga, metadata y selección de ROI.")
     parser.add_argument("imagen", type=Path, help="Ruta a la imagen SEM (.tif)")
     parser.add_argument(
-        "--salida", type=Path, default=Path("mascaras_roi"),
-        help="Carpeta raíz donde guardar los ROIs (por defecto: mascaras_roi)",
+        "--salida", type=Path, default=CARPETA_ROI,
+        help="Carpeta raíz donde guardar las ROIs (por defecto: data/sem/roi)",
     )
     parser.add_argument(
         "--sufijo", default=None,

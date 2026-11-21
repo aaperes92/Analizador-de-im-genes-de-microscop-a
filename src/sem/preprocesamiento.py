@@ -1,8 +1,11 @@
-"""
-Etapa 2 del pipeline SEM: preprocesamiento y mejora de imagen sobre la ROI.
+"""Preprocesamiento de imágenes SEM: mejora de la ROI antes de segmentarla.
 
 Pipeline: suavizado -> corrección de sombras -> ecualización (CLAHE) -> normalización tanh.
 Cada paso es una función pura: recibe un array y retorna uno nuevo, sin modificar la entrada.
+
+Parte del módulo SEM del proyecto "Analizador de Imágenes de Microscopía".
+
+Autor: Mauricio Romano (mauricio.romano@ib.edu.ar)
 """
 
 import matplotlib.pyplot as plt
@@ -10,7 +13,7 @@ import numpy as np
 import skimage as ski
 from matplotlib.widgets import Slider
 
-from analizador_sem.carga import _BACKENDS_SIN_VENTANA
+from .carga import _BACKENDS_SIN_VENTANA
 
 
 def suavizar(imagen: np.ndarray, sigma: float = 1.0) -> np.ndarray:
@@ -196,7 +199,7 @@ def normalizar_tanh(imagen: np.ndarray, factor: float = 1.0) -> np.ndarray:
     -------
     np.ndarray
         Imagen nueva float32 en el rango (-1, 1), centrada en 0 (la mediana queda en 0).
-        IMPORTANTE para la Etapa 3: el rango NO es [0, 1]. El signo indica si un píxel
+        IMPORTANTE para la binarización: el rango NO es [0, 1]. El signo indica si un píxel
         está por encima o por debajo de la mediana.
 
     Raises
@@ -217,7 +220,7 @@ def explorar_preprocesamiento(roi: np.ndarray, metodo_sombras: str = "blur_resta
 
     Muestra el pipeline en tiempo real al mover los sliders:
     fila 1: ROI original | sin sombras | post-CLAHE
-    fila 2: post-tanh | histogramas de cada etapa (superpuestos, normalizados a [0, 1]) | sliders
+    fila 2: post-tanh | histogramas de cada paso (superpuestos, normalizados a [0, 1]) | sliders
 
     Sliders:
     - Sigma blur: suavizado gaussiano (0.5 a 5.0, inicial 1.0)
@@ -270,8 +273,8 @@ def explorar_preprocesamiento(roi: np.ndarray, metodo_sombras: str = "blur_resta
     return dict(parametros)
 
 
-# Orden de las etapas y el parámetro que controla cada una (para recalcular solo lo necesario).
-_ETAPAS = (
+# Orden de los pasos y el parámetro que controla cada uno (para recalcular solo lo necesario).
+_PASOS = (
     ("suave", "sigma"),
     ("Sin sombras", "sombras"),
     ("CLAHE", "clip_limit"),
@@ -283,31 +286,31 @@ def _procesar(
     roi: np.ndarray, parametros: dict, previo: dict | None = None, cambio: str | None = None
 ) -> dict[str, np.ndarray]:
     """
-    Corre el pipeline y retorna la imagen de cada etapa.
+    Corre el pipeline y retorna la imagen de cada paso.
 
     Si se pasa `previo` (resultado anterior) y `cambio` (parámetro modificado: 'sigma',
-    'sombras', 'clip_limit' o 'factor_tanh'), reutiliza las etapas anteriores a ese
+    'sombras', 'clip_limit' o 'factor_tanh'), reutiliza los pasos anteriores a ese
     parámetro y recalcula solo desde ahí.
     """
-    claves = [parametro for _, parametro in _ETAPAS]
+    claves = [parametro for _, parametro in _PASOS]
     desde = claves.index(cambio) if (previo is not None and cambio in claves) else 0
-    etapas = dict(previo) if desde > 0 else {"Original": roi}
+    pasos = dict(previo) if desde > 0 else {"Original": roi}
 
     if desde <= 0:
-        etapas["suave"] = suavizar(roi, parametros["sigma"])
+        pasos["suave"] = suavizar(roi, parametros["sigma"])
     if desde <= 1:
         if parametros["metodo_sombras"] == "blur_resta":
-            etapas["Sin sombras"] = corregir_sombras(
-                etapas["suave"], "blur_resta", fraccion=parametros["fraccion"]
+            pasos["Sin sombras"] = corregir_sombras(
+                pasos["suave"], "blur_resta", fraccion=parametros["fraccion"]
             )
         else:
-            etapas["Sin sombras"] = corregir_sombras(
-                etapas["suave"], "white_tophat", radio=parametros["radio"]
+            pasos["Sin sombras"] = corregir_sombras(
+                pasos["suave"], "white_tophat", radio=parametros["radio"]
             )
     if desde <= 2:
-        etapas["CLAHE"] = ecualizar(etapas["Sin sombras"], "clahe", clip_limit=parametros["clip_limit"])
-    etapas["tanh"] = normalizar_tanh(etapas["CLAHE"], factor=parametros["factor_tanh"])
-    return etapas
+        pasos["CLAHE"] = ecualizar(pasos["Sin sombras"], "clahe", clip_limit=parametros["clip_limit"])
+    pasos["tanh"] = normalizar_tanh(pasos["CLAHE"], factor=parametros["factor_tanh"])
+    return pasos
 
 
 def _preparar_explorador(roi: np.ndarray, metodo_sombras: str):
@@ -336,12 +339,12 @@ def _preparar_explorador(roi: np.ndarray, metodo_sombras: str):
     ax_hist = fig.add_subplot(grilla[1, 1])
     grilla_sliders = grilla[1, 2].subgridspec(4, 1, hspace=1.2)
 
-    etapas = _procesar(roi, parametros)
+    pasos = _procesar(roi, parametros)
     rangos = {"Original": (0, 1), "CLAHE": (0, 1), "tanh": (-1, 1)}
     imagenes = {}
     for nombre, ax in ejes.items():
-        vmin, vmax = rangos.get(nombre, (etapas[nombre].min(), etapas[nombre].max()))
-        imagenes[nombre] = ax.imshow(etapas[nombre], cmap="gray", vmin=vmin, vmax=vmax)
+        vmin, vmax = rangos.get(nombre, (pasos[nombre].min(), pasos[nombre].max()))
+        imagenes[nombre] = ax.imshow(pasos[nombre], cmap="gray", vmin=vmin, vmax=vmax)
         ax.set_title(nombre)
         ax.set_axis_off()
 
@@ -351,9 +354,9 @@ def _preparar_explorador(roi: np.ndarray, metodo_sombras: str):
     lineas = {}
     for nombre in ejes:
         (lineas[nombre],) = ax_hist.plot(
-            centros, _histograma_normalizado(etapas[nombre], bins), label=nombre
+            centros, _histograma_normalizado(pasos[nombre], bins), label=nombre
         )
-    ax_hist.set_title("Histogramas (cada etapa normalizada a [0, 1])", fontsize=10)
+    ax_hist.set_title("Histogramas (cada paso normalizado a [0, 1])", fontsize=10)
     ax_hist.set_xlim(0, 1)
     ax_hist.legend(fontsize=8)
     ax_hist.grid(alpha=0.3)
@@ -377,8 +380,8 @@ def _preparar_explorador(roi: np.ndarray, metodo_sombras: str):
             return
         parametros[clave] = nuevo
         cambio = "sombras" if clave in ("fraccion", "radio") else clave
-        nuevas = _procesar(roi, parametros, previo=etapas, cambio=cambio)
-        etapas.update(nuevas)
+        nuevas = _procesar(roi, parametros, previo=pasos, cambio=cambio)
+        pasos.update(nuevas)
         for nombre, imagen in imagenes.items():
             imagen.set_data(nuevas[nombre])
             if nombre not in rangos:

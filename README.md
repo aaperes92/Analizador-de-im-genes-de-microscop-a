@@ -14,20 +14,11 @@ numpy
 scipy
 matplotlib
 scikit-image
-tifffile
 exifread
 
 puedes instalar los paquetes necesarios ejecutando el siguiente comando en tu terminal o línea de comandos:
 
-pip install -r requirements.txt
-
-# Uso: imágenes SEM
-
-Etapa 1 (carga, metadata y selección de ROI):
-
-.venv\Scripts\python.exe etapa1_carga.py imagenes/SEM/BSE/BSE_1.tif
-
-La documentación completa está en [docs/etapa1_carga.md](docs/etapa1_carga.md).
+pip install numpy scipy matplotlib scikit-image
 
 # Input data
 - Las entradas del programa son imágenes de microscopía en formatos estándar (por ejemplo, .tif) de datos experimentales.

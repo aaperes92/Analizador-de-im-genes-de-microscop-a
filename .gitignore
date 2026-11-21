@@ -13,7 +13,9 @@
 # workspace
 *.code-workspace
 # resultados generados
-mascaras_roi/
+data/**/*
+!data/**/
+!data/**/.gitkeep
 
 # python
 __pycache__/
