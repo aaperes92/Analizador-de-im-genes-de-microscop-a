@@ -15,6 +15,7 @@ dependencies = [
     { name = "scikit-image" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "tifffile" },
 ]
 
 [package.dev-dependencies]
@@ -33,6 +34,7 @@ requires-dist = [
     { name = "scikit-image", specifier = ">=0.26.0" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "scipy", specifier = ">=1.18.1" },
+    { name = "tifffile", specifier = ">=2026.11.8" },
 ]
 
 [package.metadata.requires-dev]
